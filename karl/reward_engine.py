@@ -36,9 +36,10 @@ from karl.config import (
     REWARD_W_PROCESS,
     REWARD_W_EFFICIENCY,
 )
+from karl.types import RewardResult
 
 
-def compute_reward(record: Dict) -> Dict[str, Any]:
+def compute_reward(record: Dict) -> RewardResult:
     """
     Compute multi-signal reward for a trajectory record.
 
