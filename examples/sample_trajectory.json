@@ -1,0 +1,87 @@
+{
+  "id": "traj_abc12345_1710000000",
+  "session_id": "abc12345-def6-7890-ghij-klmnopqrstuv",
+  "channel": "live",
+  "recorded_at": "2026-03-10T14:30:00+00:00",
+  "skill": {
+    "name": "ops:deploy",
+    "domain": "ops"
+  },
+  "context": {
+    "prompt_text": "deploy the discord bot to cloud-vm",
+    "cwd": "/Users/dev/projects/bot",
+    "git_repo": "discord-bot"
+  },
+  "trajectory": {
+    "tool_sequence": ["Read", "Read", "Edit", "Bash", "Bash"],
+    "tool_counts": {"Read": 2, "Edit": 1, "Bash": 2},
+    "total_tools": 5,
+    "successes": 5,
+    "failures": 0,
+    "bash_errors": 0,
+    "events": [
+      {
+        "tool_name": "Read",
+        "key_params": {"file_path": "/src/config.py"},
+        "success": true,
+        "ts": "2026-03-10T14:30:05+00:00"
+      },
+      {
+        "tool_name": "Read",
+        "key_params": {"file_path": "/docker-compose.yml"},
+        "success": true,
+        "ts": "2026-03-10T14:30:10+00:00"
+      },
+      {
+        "tool_name": "Edit",
+        "key_params": {"file_path": "/src/config.py"},
+        "success": true,
+        "ts": "2026-03-10T14:30:20+00:00"
+      },
+      {
+        "tool_name": "Bash",
+        "key_params": {"command": "docker-compose build bot"},
+        "success": true,
+        "exit_code": 0,
+        "ts": "2026-03-10T14:30:45+00:00"
+      },
+      {
+        "tool_name": "Bash",
+        "key_params": {"command": "docker-compose up -d bot"},
+        "success": true,
+        "exit_code": 0,
+        "ts": "2026-03-10T14:31:00+00:00"
+      }
+    ]
+  },
+  "outcome": {
+    "annotation_status": "scored",
+    "correction_detected": false,
+    "build_success": true,
+    "redo_detected": false,
+    "session_continued": true,
+    "reward_score": 0.7825,
+    "outcome_score": 0.95,
+    "process_score": 0.85,
+    "efficiency_score": 0.72,
+    "advantage": 0.2825,
+    "reward_components": {
+      "r_no_correction": 1.0,
+      "r_no_redo": 1.0,
+      "r_build_pass": 1.0,
+      "r_session_continued": 1.0,
+      "outcome_signals_available": 4,
+      "r_success_rate": 1.0,
+      "r_bash_clean": 1.0,
+      "r_error_density": 1.0,
+      "r_diversity": 0.918,
+      "r_duration_eff": 1.0,
+      "r_file_touch": 0.333
+    }
+  },
+  "timing": {
+    "started_at": "2026-03-10T14:30:00+00:00",
+    "ended_at": "2026-03-10T14:31:05+00:00",
+    "duration_s": 65.0
+  }
+}
