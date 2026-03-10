@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "karl"
+version = "1.0.0"
+description = "Knowledge Agents via Reinforcement Learning - Trajectory-based intelligence for AI coding agents"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Mohamed Diomande"},
+]
+keywords = ["reinforcement-learning", "trajectory", "LoRA", "fine-tuning", "agent", "skill-routing"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.optional-dependencies]
+prefect = ["prefect>=2.0"]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.3.0",
+]
+all = ["karl[prefect,dev]"]
+
+[project.scripts]
+karl = "karl.cli:main"
+
+[project.urls]
+Repository = "https://github.com/Diomandeee/karl"
+Documentation = "https://github.com/Diomandeee/karl#readme"
+Issues = "https://github.com/Diomandeee/karl/issues"
+
+[tool.setuptools.packages.find]
+include = ["karl*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]  # Line length handled by formatter
+
+[tool.ruff.lint.isort]
+known-first-party = ["karl"]
