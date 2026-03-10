@@ -27,6 +27,11 @@ from karl.embedding_cache import (
     cosine_similarity,
     rank_skills,
 )
+from karl.entity_bridge import (
+    update_entity_from_trajectory,
+    get_entity_health,
+    get_all_entity_health,
+)
 
 __all__ = [
     "init_session_buffer",
@@ -42,4 +47,7 @@ __all__ = [
     "embed_async",
     "cosine_similarity",
     "rank_skills",
+    "update_entity_from_trajectory",
+    "get_entity_health",
+    "get_all_entity_health",
 ]
