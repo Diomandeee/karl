@@ -14,6 +14,7 @@ Data flows: hooks -> session buffer (JSON) -> trajectories.jsonl (append-only)
 
 import fcntl
 import json
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,7 +29,7 @@ BUFFER_DIR.mkdir(parents=True, exist_ok=True)
 
 def _session_buffer_path(session_id: str) -> Path:
     """Get the buffer file path for a session."""
-    safe_id = session_id.replace("/", "_").replace("..", "_")[:64]
+    safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", session_id)[:64]
     return BUFFER_DIR / f"{safe_id}.json"
 
 

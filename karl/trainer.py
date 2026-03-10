@@ -15,11 +15,12 @@ Usage:
 """
 
 import json
+import re
 import subprocess
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from karl.config import (
     TRAIN_PATH,
@@ -39,12 +40,21 @@ from karl.config import (
 from karl.sft_exporter import export_sft
 
 
-def _ssh_cmd(cmd: str, timeout: int = 30) -> tuple:
+_SAFE_PATH_RE = re.compile(r"^[a-zA-Z0-9_./ ~-]+$")
+
+
+def _validate_remote_path(path: str) -> None:
+    """Validate remote path contains no shell metacharacters."""
+    if not _SAFE_PATH_RE.match(path):
+        raise ValueError(f"Unsafe remote path: {path!r}")
+
+
+def _ssh_cmd(cmd: str, timeout: int = 30) -> Tuple[int, str]:
     """Execute command on remote compute node via SSH alias."""
-    full_cmd = f"ssh {TRAIN_SSH_ALIAS} '{cmd}'"
     try:
         result = subprocess.run(
-            full_cmd, shell=True, capture_output=True, text=True, timeout=timeout
+            ["ssh", TRAIN_SSH_ALIAS, cmd],
+            capture_output=True, text=True, timeout=timeout,
         )
         return result.returncode, result.stdout + result.stderr
     except subprocess.TimeoutExpired:
@@ -87,6 +97,7 @@ def upload_training_data() -> Dict[str, Any]:
     if not TRAIN_PATH.exists() or not VALID_PATH.exists():
         return {"success": False, "error": "No training data files"}
 
+    _validate_remote_path(TRAIN_REMOTE_DIR)
     rc, out = _ssh_cmd(f"mkdir -p {TRAIN_REMOTE_DIR}")
     if rc != 0:
         return {"success": False, "error": f"mkdir failed: {out}"}

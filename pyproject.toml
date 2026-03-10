@@ -27,7 +27,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-prefect = ["prefect>=2.0"]
+prefect = ["prefect>=2.14,<3"]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",

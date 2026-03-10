@@ -304,7 +304,7 @@ def check_promotion_readiness() -> Dict[str, Any]:
     lift = None
     lift_check = False
     if mean_agree is not None and mean_disagree is not None:
-        lift = round(mean_disagree - mean_agree, 4)
+        lift = round(mean_agree - mean_disagree, 4)
         lift_check = lift >= PROMOTION_MIN_VECTOR_LIFT
 
     checks = {
