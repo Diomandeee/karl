@@ -14,11 +14,14 @@ Data flows: hooks -> session buffer (JSON) -> trajectories.jsonl (append-only)
 
 import fcntl
 import json
+import logging
 import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from karl.config import BUFFER_DIR, STORE_PATH, DATA_DIR
 
@@ -106,12 +109,6 @@ def append_tool_event(
     if not buf_path.exists():
         init_session_buffer(session_id)
 
-    try:
-        with open(buf_path, "r") as f:
-            buffer = json.load(f)
-    except (json.JSONDecodeError, FileNotFoundError):
-        return False
-
     # Extract key parameters (not full content, to keep buffer small)
     key_params = {}
     if tool_input:
@@ -129,12 +126,21 @@ def append_tool_event(
         "ts": datetime.now(timezone.utc).isoformat(),
     }
 
-    buffer["tool_events"].append(event)
-
     try:
-        with open(buf_path, "w") as f:
-            json.dump(buffer, f, default=str)
+        # C5: Lock read-modify-write to prevent concurrent buffer corruption
+        with open(buf_path, "r+") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                buffer = json.load(f)
+                buffer["tool_events"].append(event)
+                f.seek(0)
+                json.dump(buffer, f, default=str)
+                f.truncate()
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
         return True
+    except (json.JSONDecodeError, FileNotFoundError):
+        return False
     except Exception:
         return False
 
@@ -302,42 +308,38 @@ def annotate_previous(
         return False
 
     try:
-        with open(STORE_PATH, "r") as f:
-            lines = f.readlines()
+        # C2: Lock entire read-modify-write cycle to prevent lost writes
+        with open(STORE_PATH, "r+") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                lines = f.readlines()
+                updated = False
+                for i in range(len(lines) - 1, -1, -1):
+                    try:
+                        record = json.loads(lines[i])
+                        if record.get("session_id") == session_id:
+                            outcome = record.get("outcome", {})
+                            if correction_detected is not None:
+                                outcome["correction_detected"] = correction_detected
+                            if redo_detected is not None:
+                                outcome["redo_detected"] = redo_detected
+                            if any(v is not None for v in [correction_detected, redo_detected]):
+                                outcome["annotation_status"] = "annotated"
+                            record["outcome"] = outcome
+                            lines[i] = json.dumps(record, default=str) + "\n"
+                            updated = True
+                            break
+                    except json.JSONDecodeError:
+                        continue
+                if updated:
+                    f.seek(0)
+                    f.writelines(lines)
+                    f.truncate()
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        return updated
     except Exception:
         return False
-
-    updated = False
-    for i in range(len(lines) - 1, -1, -1):
-        try:
-            record = json.loads(lines[i])
-            if record.get("session_id") == session_id:
-                outcome = record.get("outcome", {})
-                if correction_detected is not None:
-                    outcome["correction_detected"] = correction_detected
-                if redo_detected is not None:
-                    outcome["redo_detected"] = redo_detected
-                if any(v is not None for v in [correction_detected, redo_detected]):
-                    outcome["annotation_status"] = "annotated"
-                record["outcome"] = outcome
-                lines[i] = json.dumps(record, default=str) + "\n"
-                updated = True
-                break
-        except json.JSONDecodeError:
-            continue
-
-    if updated:
-        try:
-            with open(STORE_PATH, "w") as f:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                try:
-                    f.writelines(lines)
-                finally:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-            return True
-        except Exception:
-            return False
-    return False
 
 
 def _cleanup_buffer(buf_path: Path) -> None:

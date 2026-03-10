@@ -10,9 +10,13 @@ from pathlib import Path
 from typing import Optional
 
 
-def _env_path(key: str, default: str) -> Path:
+def env_path(key: str, default: str) -> Path:
     """Resolve a path from environment variable or default."""
     return Path(os.environ.get(key, default)).expanduser()
+
+
+# Backwards compatibility alias
+_env_path = env_path
 
 
 def _env_float(key: str, default: float) -> float:
@@ -65,6 +69,16 @@ CACHE_TTL_SECONDS = _env_int("KARL_CACHE_TTL", 86400)  # 24 hours
 REWARD_W_OUTCOME = _env_float("KARL_REWARD_W_OUTCOME", 0.40)
 REWARD_W_PROCESS = _env_float("KARL_REWARD_W_PROCESS", 0.35)
 REWARD_W_EFFICIENCY = _env_float("KARL_REWARD_W_EFFICIENCY", 0.25)
+
+# Validate reward weights sum to 1.0 (A9/X9)
+_reward_sum = REWARD_W_OUTCOME + REWARD_W_PROCESS + REWARD_W_EFFICIENCY
+if abs(_reward_sum - 1.0) > 0.01:
+    import warnings
+    warnings.warn(
+        f"KARL reward weights sum to {_reward_sum:.3f}, not 1.0. "
+        f"Scores will be miscalibrated.",
+        stacklevel=1,
+    )
 
 # ---------------------------------------------------------------------------
 # Weight updater (EMA)

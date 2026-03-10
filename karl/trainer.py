@@ -15,12 +15,15 @@ Usage:
 """
 
 import json
+import logging
 import re
 import subprocess
 import time
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 from karl.config import (
     TRAIN_PATH,

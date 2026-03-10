@@ -5,10 +5,13 @@ Sends analysis reports, training results, and alerts to Discord.
 """
 
 import json
+import logging
 import os
 import urllib.request
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from karl.config import DISCORD_WEBHOOK
 
@@ -51,4 +54,6 @@ def post_discord(message: str) -> bool:
         urllib.request.urlopen(req, timeout=5)
         return True
     except Exception:
+        # S5: Never log the webhook URL (contains secret token)
+        logger.debug("Discord webhook post failed")
         return False

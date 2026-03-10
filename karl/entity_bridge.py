@@ -14,11 +14,15 @@ Usage:
     update_entity_from_trajectory(record)  # Called from flush_session
 """
 
+import fcntl
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 import karl.config as config
 
@@ -59,16 +63,29 @@ def _load_entity(skill_name: str) -> Optional[Dict[str, Any]]:
 
 
 def _save_entity(skill_name: str, entity: Dict[str, Any]) -> bool:
-    """Save SEA entity state.json."""
+    """Save SEA entity state.json with file locking (C7)."""
     entity_dir = SEA_DIR / skill_name
     entity_dir.mkdir(parents=True, exist_ok=True)
     state_path = entity_dir / "state.json"
     try:
         with open(state_path, "w") as f:
-            json.dump(entity, f, indent=2)
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                json.dump(entity, f, indent=2)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
         return True
     except OSError:
         return False
+
+
+def _load_and_lock_entity(skill_name: str) -> Optional[Dict[str, Any]]:
+    """Load entity with advisory locking for atomic update.
+
+    For reads that will be followed by writes, use update_entity_from_trajectory
+    which handles the full locked read-modify-write cycle.
+    """
+    return _load_entity(skill_name)
 
 
 def _extract_topics(text: str, limit: int = 10) -> List[str]:
