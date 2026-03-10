@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 import karl.config as config
+from karl.types import EntityState
 
 # SEA entity directory (configurable)
 SEA_DIR = Path(config._env_path(
@@ -112,7 +113,7 @@ def _update_topic_list(
     return combined[:max_items]
 
 
-def _default_entity(skill_name: str) -> Dict[str, Any]:
+def _default_entity(skill_name: str) -> EntityState:
     """Create a default SEA entity state."""
     return {
         "skill": skill_name,

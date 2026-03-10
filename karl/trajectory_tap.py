@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 from karl.config import BUFFER_DIR, STORE_PATH, DATA_DIR
+from karl.types import OutcomeSignals
 
 # Ensure directories exist on import
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -147,7 +148,7 @@ def append_tool_event(
 
 def flush_session(
     session_id: str,
-    outcome_signals: Optional[Dict[str, Any]] = None,
+    outcome_signals: Optional[OutcomeSignals] = None,
 ) -> Optional[Dict]:
     """
     Tap C: Flush session buffer to a trajectory record and append to store.
