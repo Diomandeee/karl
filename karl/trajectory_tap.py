@@ -251,6 +251,12 @@ def flush_session(
         pass  # Store without reward if engine fails
 
     if append_to_store(record):
+        # Update SEA entity with reward data
+        try:
+            from karl.entity_bridge import update_entity_from_trajectory
+            update_entity_from_trajectory(record)
+        except Exception:
+            pass  # Entity bridge is optional
         _cleanup_buffer(buf_path)
         return record
     return None
