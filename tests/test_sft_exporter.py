@@ -50,6 +50,26 @@ def _make_trajectory(reward: float = 0.6, tools: int = 5):
     }
 
 
+class TestCredentialStripping:
+    def test_strips_api_keys(self):
+        from karl.sft_exporter import _strip_credentials
+        assert "[REDACTED]" in _strip_credentials("use api_key=sk-abc123def456")
+
+    def test_strips_github_pats(self):
+        from karl.sft_exporter import _strip_credentials
+        assert "[REDACTED]" in _strip_credentials("clone with ghp_ABCDEFabcdef1234567890abcdefabcdef1234")
+
+    def test_strips_jwts(self):
+        from karl.sft_exporter import _strip_credentials
+        text = "header: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0"
+        assert "[REDACTED]" in _strip_credentials(text)
+
+    def test_preserves_normal_text(self):
+        from karl.sft_exporter import _strip_credentials
+        text = "deploy the service and run tests"
+        assert _strip_credentials(text) == text
+
+
 class TestSFTExporter:
     def test_no_store(self, temp_data_dir):
         from karl.sft_exporter import export_sft
