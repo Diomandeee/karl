@@ -16,12 +16,11 @@ import hashlib
 import json
 import math
 import os
-import pickle
 import threading
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from karl.config import (
     PROMPT_CACHE_PATH,
@@ -35,8 +34,10 @@ from karl.config import (
 
 # In-memory cache: {hash: (embedding, timestamp)}
 _cache: Dict[str, Tuple[List[float], float]] = {}
+_cache_lock = threading.Lock()
 _cache_loaded = False
 _skill_cache: Dict[str, Tuple[List[float], float]] = {}
+_skill_cache_lock = threading.Lock()
 _skill_cache_loaded = False
 _skill_cache_mtime: float = 0.0
 
@@ -47,14 +48,16 @@ def cache_key(text: str) -> str:
 
 
 def _load_cache() -> None:
-    """Load prompt embedding cache from disk."""
+    """Load prompt embedding cache from disk (JSON format)."""
     global _cache, _cache_loaded
     if _cache_loaded:
         return
-    if PROMPT_CACHE_PATH.exists():
+    cache_path = PROMPT_CACHE_PATH.with_suffix(".json")
+    if cache_path.exists():
         try:
-            with open(PROMPT_CACHE_PATH, "rb") as f:
-                _cache = pickle.load(f)
+            with open(cache_path, "r") as f:
+                raw = json.load(f)
+            _cache = {k: (v[0], v[1]) for k, v in raw.items()}
             now = time.time()
             expired = [k for k, (_, ts) in _cache.items() if now - ts > CACHE_TTL_SECONDS]
             for k in expired:
@@ -65,41 +68,45 @@ def _load_cache() -> None:
 
 
 def _save_cache() -> None:
-    """Persist prompt embedding cache to disk."""
+    """Persist prompt embedding cache to disk (JSON format)."""
     try:
-        PROMPT_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(PROMPT_CACHE_PATH, "wb") as f:
-            pickle.dump(_cache, f)
+        cache_path = PROMPT_CACHE_PATH.with_suffix(".json")
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        serializable = {k: [v[0], v[1]] for k, v in _cache.items()}
+        with open(cache_path, "w") as f:
+            json.dump(serializable, f)
     except Exception:
         pass
 
 
 def cache_get(text: str) -> Optional[List[float]]:
     """Get cached embedding for text. Returns None on miss."""
-    _load_cache()
-    key = cache_key(text)
-    entry = _cache.get(key)
-    if entry is None:
-        return None
-    embedding, ts = entry
-    if time.time() - ts > CACHE_TTL_SECONDS:
-        del _cache[key]
-        return None
-    return embedding
+    with _cache_lock:
+        _load_cache()
+        key = cache_key(text)
+        entry = _cache.get(key)
+        if entry is None:
+            return None
+        embedding, ts = entry
+        if time.time() - ts > CACHE_TTL_SECONDS:
+            del _cache[key]
+            return None
+        return embedding
 
 
 def cache_store(text: str, embedding: List[float]) -> None:
     """Store embedding in cache with LRU eviction."""
-    _load_cache()
-    key = cache_key(text)
-    _cache[key] = (embedding, time.time())
-    if len(_cache) > CACHE_MAX_ENTRIES:
-        oldest = min(_cache.items(), key=lambda x: x[1][1])
-        del _cache[oldest[0]]
-    _save_cache()
+    with _cache_lock:
+        _load_cache()
+        key = cache_key(text)
+        _cache[key] = (embedding, time.time())
+        if len(_cache) > CACHE_MAX_ENTRIES:
+            oldest = min(_cache.items(), key=lambda x: x[1][1])
+            del _cache[oldest[0]]
+        _save_cache()
 
 
-def embed_async(text: str, embed_url: Optional[str] = None) -> None:
+def embed_async(text: str, embed_url: Optional[str] = None) -> threading.Thread:
     """Fire-and-forget: compute embedding in background thread, store in cache.
 
     Called from the hook after routing. The embedding will be available
@@ -163,25 +170,28 @@ def build_prompt_embedding_text(prompt: str, cwd: str = "") -> str:
 
 
 def load_skill_embeddings() -> Dict[str, Tuple[List[float], float]]:
-    """Load skill embeddings from local pickle cache.
+    """Load skill embeddings from local JSON cache.
 
     Returns: {skill_name: (embedding_vector, trajectory_weight)}
     Mtime-based caching: reloads when file changes on disk.
     """
     global _skill_cache, _skill_cache_loaded, _skill_cache_mtime
 
-    if not SKILL_EMBEDDINGS_PATH.exists():
+    skill_path = SKILL_EMBEDDINGS_PATH.with_suffix(".json")
+    if not skill_path.exists():
         return {}
 
-    mtime = SKILL_EMBEDDINGS_PATH.stat().st_mtime
+    mtime = skill_path.stat().st_mtime
     if _skill_cache_loaded and mtime == _skill_cache_mtime:
         return _skill_cache
 
     try:
-        with open(SKILL_EMBEDDINGS_PATH, "rb") as f:
-            _skill_cache = pickle.load(f)
-        _skill_cache_mtime = mtime
-        _skill_cache_loaded = True
+        with _skill_cache_lock:
+            with open(skill_path, "r") as f:
+                raw = json.load(f)
+            _skill_cache = {k: (v[0], v[1]) for k, v in raw.items()}
+            _skill_cache_mtime = mtime
+            _skill_cache_loaded = True
     except Exception:
         _skill_cache = {}
         _skill_cache_loaded = True
@@ -190,11 +200,14 @@ def load_skill_embeddings() -> Dict[str, Tuple[List[float], float]]:
 
 
 def save_skill_embeddings(embeddings: Dict[str, Tuple[List[float], float]]) -> None:
-    """Persist skill embeddings to local pickle."""
+    """Persist skill embeddings to local JSON."""
     try:
-        SKILL_EMBEDDINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(SKILL_EMBEDDINGS_PATH, "wb") as f:
-            pickle.dump(embeddings, f)
+        skill_path = SKILL_EMBEDDINGS_PATH.with_suffix(".json")
+        skill_path.parent.mkdir(parents=True, exist_ok=True)
+        serializable = {k: [v[0], v[1]] for k, v in embeddings.items()}
+        with _skill_cache_lock:
+            with open(skill_path, "w") as f:
+                json.dump(serializable, f)
     except Exception:
         pass
 
