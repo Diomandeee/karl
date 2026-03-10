@@ -11,11 +11,18 @@ data/
 *.pkl
 *.jsonl
 
+# Test/coverage artifacts
+.pytest_cache/
+htmlcov/
+coverage.xml
+.coverage
+
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*.orig
 
 # OS
 .DS_Store
@@ -25,3 +32,6 @@ Thumbs.db
 .env
 .venv/
 venv/
+
+# Logs
+*.log

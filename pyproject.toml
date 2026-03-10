@@ -31,7 +31,8 @@ prefect = ["prefect>=2.14,<3"]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "ruff>=0.3.0",
+    "ruff>=0.3,<1",
+    "mypy>=1.5",
 ]
 all = ["karl[prefect,dev]"]
 
@@ -61,3 +62,10 @@ ignore = ["E501"]  # Line length handled by formatter
 
 [tool.ruff.lint.isort]
 known-first-party = ["karl"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true

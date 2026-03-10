@@ -3,10 +3,10 @@ embedding_cache.py - Async embedding cache for KARL skill routing.
 
 Provides:
   - LRU cache for prompt embeddings (configurable max entries + TTL)
-  - Pickle persistence across sessions
-  - Async embed via external API (non-blocking, fire-and-forget)
+  - JSON persistence across sessions
+  - Async embed via bounded thread pool (non-blocking, fire-and-forget)
   - Skill embedding loader with mtime-based refresh
-  - Cosine similarity computation (no numpy dependency)
+  - Cosine similarity computation (numpy-accelerated)
 
 Design constraint: agent hook budget is 500ms. Embedding API takes 300-500ms.
 We embed ASYNC and use the cache for the NEXT prompt, not the current one.
@@ -14,13 +14,20 @@ We embed ASYNC and use the cache for the NEXT prompt, not the current one.
 
 import hashlib
 import json
+import logging
 import math
 import os
 import threading
 import time
 import urllib.request
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+
+logger = logging.getLogger(__name__)
 
 from karl.config import (
     PROMPT_CACHE_PATH,
@@ -32,14 +39,20 @@ from karl.config import (
     CACHE_TTL_SECONDS,
 )
 
-# In-memory cache: {hash: (embedding, timestamp)}
-_cache: Dict[str, Tuple[List[float], float]] = {}
+# In-memory cache: OrderedDict for O(1) LRU eviction
+_cache: OrderedDict[str, Tuple[List[float], float]] = OrderedDict()
 _cache_lock = threading.Lock()
 _cache_loaded = False
+_cache_stores_since_save = 0
+_SAVE_INTERVAL = 10  # Save to disk every N stores
+
 _skill_cache: Dict[str, Tuple[List[float], float]] = {}
 _skill_cache_lock = threading.Lock()
 _skill_cache_loaded = False
 _skill_cache_mtime: float = 0.0
+
+# Bounded thread pool for async embedding (C4)
+_embed_pool = ThreadPoolExecutor(max_workers=4)
 
 
 def cache_key(text: str) -> str:
@@ -95,28 +108,33 @@ def cache_get(text: str) -> Optional[List[float]]:
 
 
 def cache_store(text: str, embedding: List[float]) -> None:
-    """Store embedding in cache with LRU eviction."""
+    """Store embedding in cache with O(1) LRU eviction. Batched disk saves."""
+    global _cache_stores_since_save
     with _cache_lock:
         _load_cache()
         key = cache_key(text)
         _cache[key] = (embedding, time.time())
+        _cache.move_to_end(key)
         if len(_cache) > CACHE_MAX_ENTRIES:
-            oldest = min(_cache.items(), key=lambda x: x[1][1])
-            del _cache[oldest[0]]
-        _save_cache()
+            _cache.popitem(last=False)  # O(1) eviction of oldest
+        _cache_stores_since_save += 1
+        if _cache_stores_since_save >= _SAVE_INTERVAL:
+            _save_cache()
+            _cache_stores_since_save = 0
 
 
-def embed_async(text: str, embed_url: Optional[str] = None) -> threading.Thread:
-    """Fire-and-forget: compute embedding in background thread, store in cache.
+def embed_async(text: str, embed_url: Optional[str] = None) -> "concurrent.futures.Future[None]":
+    """Fire-and-forget: compute embedding in bounded thread pool, store in cache.
 
     Called from the hook after routing. The embedding will be available
-    for the NEXT prompt via cache_get(). Uses daemon=True so we don't
-    block process exit, but callers should join the thread with a
-    timeout before exiting to ensure the cache gets populated.
+    for the NEXT prompt via cache_get(). Uses ThreadPoolExecutor(max_workers=4)
+    to bound concurrent embed requests (C4).
+
+    Returns a Future that callers can .result(timeout=N) if needed.
     """
     url = embed_url or EMBED_URL
 
-    def _do_embed():
+    def _do_embed() -> None:
         try:
             req = urllib.request.Request(
                 url,
@@ -129,11 +147,9 @@ def embed_async(text: str, embed_url: Optional[str] = None) -> threading.Thread:
                 if embedding and len(embedding) == EMBEDDING_DIM:
                     cache_store(text, embedding)
         except Exception:
-            pass
+            logger.debug("embed_async failed for text len=%d", len(text))
 
-    t = threading.Thread(target=_do_embed, daemon=True)
-    t.start()
-    return t  # Caller can join if needed
+    return _embed_pool.submit(_do_embed)
 
 
 def embed_sync(text: str, embed_url: Optional[str] = None) -> Optional[List[float]]:
@@ -154,6 +170,12 @@ def embed_sync(text: str, embed_url: Optional[str] = None) -> Optional[List[floa
     except Exception:
         pass
     return None
+
+
+def flush_cache() -> None:
+    """Force-save the prompt cache to disk. Call on process exit."""
+    with _cache_lock:
+        _save_cache()
 
 
 def build_prompt_embedding_text(prompt: str, cwd: str = "") -> str:
@@ -213,20 +235,21 @@ def save_skill_embeddings(embeddings: Dict[str, Tuple[List[float], float]]) -> N
 
 
 # ---------------------------------------------------------------------------
-# Vector Math (no numpy needed)
+# Vector Math (numpy-accelerated)
 # ---------------------------------------------------------------------------
 
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:
-    """Compute cosine similarity between two vectors."""
+    """Compute cosine similarity between two vectors using numpy."""
     if len(a) != len(b) or len(a) == 0:
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(x * x for x in b))
+    va = np.asarray(a, dtype=np.float32)
+    vb = np.asarray(b, dtype=np.float32)
+    norm_a = np.linalg.norm(va)
+    norm_b = np.linalg.norm(vb)
     if norm_a == 0 or norm_b == 0:
         return 0.0
-    return dot / (norm_a * norm_b)
+    return float(np.dot(va, vb) / (norm_a * norm_b))
 
 
 def rank_skills(

@@ -22,10 +22,13 @@ Usage:
 
 import fcntl
 import json
+import logging
 import math
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 from karl.config import (
     STORE_PATH,
@@ -264,78 +267,82 @@ def backfill_rewards(force: bool = False) -> Dict[str, int]:
     if not STORE_PATH.exists():
         return {"total": 0, "scored": 0, "skipped": 0, "errors": 0}
 
-    try:
-        with open(STORE_PATH, "r") as f:
-            lines = f.readlines()
-    except Exception:
-        return {"total": 0, "scored": 0, "skipped": 0, "errors": 0}
-
     scored = 0
     skipped = 0
     errors = 0
-    updated_lines = []
 
-    # Pass 1: compute domain baselines
-    domain_rewards: Dict[str, List[float]] = {}
-    for line in lines:
-        try:
-            record = json.loads(line)
-            domain = record.get("skill", {}).get("domain")
-            existing_reward = record.get("outcome", {}).get("reward_score")
-            if existing_reward is not None:
-                bucket = domain or "_global"
-                domain_rewards.setdefault(bucket, []).append(existing_reward)
-        except json.JSONDecodeError:
-            pass
+    try:
+        # C3: Lock entire read-modify-write cycle to prevent lost writes
+        with open(STORE_PATH, "r+") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                lines = f.readlines()
+                updated_lines = []
 
-    domain_baselines = {
-        k: sum(v) / len(v) for k, v in domain_rewards.items() if v
-    }
+                # Pass 1: compute domain baselines
+                domain_rewards: Dict[str, List[float]] = {}
+                for line in lines:
+                    try:
+                        record = json.loads(line)
+                        domain = record.get("skill", {}).get("domain")
+                        existing_reward = record.get("outcome", {}).get("reward_score")
+                        if existing_reward is not None:
+                            bucket = domain or "_global"
+                            domain_rewards.setdefault(bucket, []).append(existing_reward)
+                    except json.JSONDecodeError:
+                        pass
 
-    # Pass 2: score and annotate
-    for line in lines:
-        try:
-            record = json.loads(line)
-            existing = record.get("outcome", {}).get("reward_score")
+                domain_baselines = {
+                    k: sum(v) / len(v) for k, v in domain_rewards.items() if v
+                }
 
-            if existing is not None and not force:
-                skipped += 1
-                updated_lines.append(line)
-                continue
+                # Pass 2: score and annotate
+                for line in lines:
+                    try:
+                        record = json.loads(line)
+                        existing = record.get("outcome", {}).get("reward_score")
 
-            reward_data = compute_reward(record)
+                        if existing is not None and not force:
+                            skipped += 1
+                            updated_lines.append(line)
+                            continue
 
-            domain = record.get("skill", {}).get("domain") or "_global"
-            baseline = domain_baselines.get(domain, 0.5)
-            advantage = compute_advantage(record, reward_data["reward_score"], baseline)
+                        reward_data = compute_reward(record)
 
-            outcome = record.get("outcome", {})
-            outcome["reward_score"] = reward_data["reward_score"]
-            outcome["reward_components"] = reward_data["components"]
-            outcome["outcome_score"] = reward_data["outcome_score"]
-            outcome["process_score"] = reward_data["process_score"]
-            outcome["efficiency_score"] = reward_data["efficiency_score"]
-            outcome["advantage"] = round(advantage, 4)
-            outcome["annotation_status"] = "scored"
-            record["outcome"] = outcome
+                        domain = record.get("skill", {}).get("domain") or "_global"
+                        baseline = domain_baselines.get(domain, 0.5)
+                        advantage = compute_advantage(
+                            record, reward_data["reward_score"], baseline
+                        )
 
-            updated_lines.append(json.dumps(record, default=str) + "\n")
-            scored += 1
+                        outcome = record.get("outcome", {})
+                        outcome["reward_score"] = reward_data["reward_score"]
+                        outcome["reward_components"] = reward_data["components"]
+                        outcome["outcome_score"] = reward_data["outcome_score"]
+                        outcome["process_score"] = reward_data["process_score"]
+                        outcome["efficiency_score"] = reward_data["efficiency_score"]
+                        outcome["advantage"] = round(advantage, 4)
+                        outcome["annotation_status"] = "scored"
+                        record["outcome"] = outcome
 
-        except (json.JSONDecodeError, Exception):
-            errors += 1
-            updated_lines.append(line)
+                        updated_lines.append(json.dumps(record, default=str) + "\n")
+                        scored += 1
 
-    if scored > 0:
-        try:
-            with open(STORE_PATH, "w") as f:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                try:
+                    except (json.JSONDecodeError, Exception) as exc:
+                        logger.debug("backfill error: %s", exc)
+                        errors += 1
+                        updated_lines.append(line)
+
+                if scored > 0:
+                    f.seek(0)
                     f.writelines(updated_lines)
-                finally:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        except Exception:
-            errors += 1
+                    f.truncate()
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    except Exception as exc:
+        logger.warning("backfill_rewards file error: %s", exc)
+        errors += 1
+        return {"total": 0, "scored": scored, "skipped": skipped, "errors": errors}
 
     return {
         "total": len(lines),
