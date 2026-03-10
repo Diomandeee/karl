@@ -20,13 +20,32 @@ Usage:
     stats = export_sft(min_reward=0.6)       # Filter by minimum reward
 """
 
+import fcntl
 import hashlib
 import json
 import random
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import karl.config as config
+
+# S6: Patterns that may indicate leaked credentials in prompt text
+_CREDENTIAL_PATTERNS = [
+    re.compile(r"(?:api[_-]?key|token|secret|password|passwd|credential)[\s=:]+\S+", re.I),
+    re.compile(r"(?:sk|pk|rk|ak)-[a-zA-Z0-9]{20,}"),  # API key formats
+    re.compile(r"Bearer\s+[a-zA-Z0-9._\-]+"),
+    re.compile(r"ghp_[a-zA-Z0-9]{36}"),  # GitHub PATs
+    re.compile(r"xox[bprs]-[a-zA-Z0-9\-]+"),  # Slack tokens
+    re.compile(r"eyJ[a-zA-Z0-9_\-]{20,}\.[a-zA-Z0-9_\-]{20,}"),  # JWTs
+]
+
+
+def _strip_credentials(text: str) -> str:
+    """Remove potential credential patterns from text before including in training data."""
+    for pattern in _CREDENTIAL_PATTERNS:
+        text = pattern.sub("[REDACTED]", text)
+    return text
 
 
 def _trajectory_to_plan(record: Dict) -> str:
@@ -123,17 +142,21 @@ def export_sft(
     if not config.STORE_PATH.exists():
         return {"error": "No trajectory store found"}
 
-    # Load scored trajectories
+    # C10: Lock store for consistent read during export
     records = []
     with open(config.STORE_PATH) as f:
-        for line in f:
-            try:
-                record = json.loads(line)
-                reward = record.get("outcome", {}).get("reward_score")
-                if reward is not None and reward >= min_reward:
-                    records.append(record)
-            except json.JSONDecodeError:
-                continue
+        fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+        try:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                    reward = record.get("outcome", {}).get("reward_score")
+                    if reward is not None and reward >= min_reward:
+                        records.append(record)
+                except json.JSONDecodeError:
+                    continue
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     if not records:
         return {"total": 0, "message": "No scored trajectories found"}
@@ -168,7 +191,7 @@ def export_sft(
             filtered_low_advantage += 1
             continue
 
-        prompt = record.get("context", {}).get("prompt_text", "")
+        prompt = _strip_credentials(record.get("context", {}).get("prompt_text", ""))
         if not prompt or len(prompt) < 10:
             prompt = f"[Task in {record.get('context', {}).get('cwd', 'unknown project')}]"
 

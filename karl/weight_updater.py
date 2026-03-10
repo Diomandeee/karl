@@ -13,6 +13,7 @@ Usage:
     result = update_weights(dry_run=True)  # Preview changes
 """
 
+import fcntl
 import json
 import sys
 from pathlib import Path
@@ -44,16 +45,21 @@ def collect_skill_rewards() -> Dict[str, List[float]]:
         return {}
 
     rewards_by_skill: Dict[str, List[float]] = {}
+    # C11: Shared lock for consistent read
     with open(STORE_PATH) as f:
-        for line in f:
-            try:
-                record = json.loads(line)
-                skill_name = record.get("skill", {}).get("name")
-                reward = record.get("outcome", {}).get("reward_score")
-                if skill_name and reward is not None:
-                    rewards_by_skill.setdefault(skill_name, []).append(reward)
-            except json.JSONDecodeError:
-                continue
+        fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+        try:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                    skill_name = record.get("skill", {}).get("name")
+                    reward = record.get("outcome", {}).get("reward_score")
+                    if skill_name and reward is not None:
+                        rewards_by_skill.setdefault(skill_name, []).append(reward)
+                except json.JSONDecodeError:
+                    continue
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     return rewards_by_skill
 

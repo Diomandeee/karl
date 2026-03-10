@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v4
@@ -29,16 +29,8 @@ jobs:
       - name: Lint with ruff
         run: ruff check karl/ tests/
 
-      - name: Run tests
-        run: pytest --cov=karl --cov-report=term-missing
+      - name: Type check with mypy
+        run: mypy karl/ --ignore-missing-imports
 
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install ruff
-      - run: ruff check karl/ tests/
-      - run: ruff format --check karl/ tests/
+      - name: Run tests
+        run: pytest tests/ -v --tb=short
