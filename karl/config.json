@@ -1,0 +1,61 @@
+{
+  "routing_mode": "shadow",
+  "promotion_thresholds": {
+    "min_shadow_records": 100,
+    "min_hit_rate": 0.5,
+    "min_agreement_rate": 0.5,
+    "min_vector_lift": 0.02
+  },
+  "auto_promote": true,
+  "centroid_refresh_interval_hours": 24,
+  "last_promotion_check": null,
+  "last_centroid_refresh": "2026-03-15T09:26:49.088647+00:00",
+  "embedding": {
+    "model": "gemini-embedding-001",
+    "dimension": 3072,
+    "endpoint": "http://localhost:8000/api/rag/embed",
+    "max_input_chars": 4000,
+    "cache_max_entries": 500,
+    "cache_ttl_seconds": 86400
+  },
+  "skill_penalties": {
+    "shell-session": 0.02,
+    "mixed-session": 0.015,
+    "authoring-session": 0.01,
+    "test": 0.01
+  },
+  "sft": {
+    "base_model": "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit",
+    "lora_rank": 8,
+    "lora_layers": 16,
+    "learning_rate": 1e-05,
+    "train_host": "mac4"
+  },
+  "promoted_at": "2026-03-15T09:08:20.926780+00:00",
+  "pre_promotion_reward_mean": 0.6023174311926608,
+  "promotion_checks": {
+    "annotated_records": {
+      "required": 100,
+      "actual": 109,
+      "pass": true
+    },
+    "vector_accuracy": {
+      "required": 0.5,
+      "actual": 0.5413,
+      "pass": true
+    },
+    "vector_coverage": {
+      "required": 0.5,
+      "actual": 1.0,
+      "pass": true
+    },
+    "vector_lift": {
+      "required": 0.02,
+      "actual": 0.0247,
+      "pass": true,
+      "correct_reward": 0.6107,
+      "incorrect_reward": 0.586
+    }
+  },
+  "routing_overrides": {}
+}
