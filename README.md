@@ -31,7 +31,7 @@ Next prompt arrives
 [Tap D] Detect corrections ("no, I meant...", "try again") -> annotate previous
 ```
 
-The trajectory store grows over time. Weekly, the best trajectories are exported as advantage-weighted SFT data and used to train a LoRA adapter via MLX.
+The trajectory store grows over time. The best trajectories are exported as advantage-weighted SFT data and used to train a LoRA adapter via MLX.
 
 ## Reward Engine
 
@@ -50,15 +50,16 @@ Composite reward is `[0, 1]`. Advantage = reward - domain baseline, used for OAP
 KARL adds a vector similarity layer alongside existing regex-based routing:
 
 1. Pre-compute embeddings for all active skills (intent + workflow + historical prompts)
-2. On each prompt, embed asynchronously and cache for the next prompt
-3. Shadow mode: compare regex vs vector selections, log agreement
-4. Promotion gate: activate vector routing when data thresholds are met
+2. On each prompt, embed and compare against skill centroids
+3. Shadow mode: compare regex vs vector selections, log agreement and accuracy
+4. Hybrid routing table: per-skill decision on vector vs regex based on measured accuracy
+5. Confidence analysis: similarity thresholds, margin analysis, rejection curves
+6. Per-skill routing overrides for manual control
 
 **Promotion requirements:**
-- 100+ shadow routing records
-- 50%+ embedding cache hit rate
-- 80%+ agreement between regex and vector
-- 5%+ reward lift on vector-only matches
+- 200+ organic shadow routing records
+- Vector accuracy exceeds regex on real (non-synthetic) data
+- Per-skill accuracy measured independently
 
 ## Installation
 
@@ -74,65 +75,116 @@ pip install -e ".[dev]"
 
 ## CLI
 
+KARL ships with 67 commands. Core commands:
+
 ```bash
-# Show trajectory store stats
-karl status
+# Status and health
+karl status                  # Trajectory store stats
+karl health-digest           # Full system health report
+karl dashboard               # Generate JSON dashboard
+karl organic-status          # Organic data accumulation progress
 
-# Backfill rewards for unscored trajectories
-karl backfill
-karl backfill --force  # Recompute all
+# Trajectory management
+karl backfill                # Backfill rewards for unscored trajectories
+karl backfill --force        # Recompute all rewards
+karl replay                  # Replay trajectory sequence
 
-# Export SFT training data
-karl export
-karl export --dry-run
-karl export --min-reward 0.6
+# Skill routing
+karl analyze                 # Shadow routing analysis
+karl accuracy                # Vector vs regex accuracy breakdown
+karl accuracy-trend          # Accuracy over time
+karl accuracy-source         # Accuracy by data source (organic vs synthetic)
+karl confidence-analysis     # Similarity/margin threshold analysis
+karl hybrid                  # Per-skill routing table (vector vs regex)
+karl routing-override        # Manual per-skill route overrides
+karl promote                 # Check promotion readiness
+karl auto-promote            # Promote if thresholds met
 
-# Run full training pipeline (export -> upload -> train)
-karl train
-karl train --dry-run
+# Embeddings and centroids
+karl bootstrap               # Generate skill embeddings
+karl diversity               # Centroid separation analysis
+karl exemplars               # List exemplar prompts per skill
+karl add-exemplar            # Add exemplar prompt
+karl remove-exemplar         # Remove exemplar prompt
+karl rebuild-centroid        # Rebuild centroid from exemplars
+karl centroid-snapshot       # Save centroid version
+karl centroid-rollback       # Restore previous centroid version
 
-# Shadow routing analysis + promotion check
-karl analyze
+# Training pipeline
+karl export                  # Export SFT training data
+karl sft-preflight           # Pre-flight checks before training
+karl sft-launch              # Launch remote LoRA training
+karl sft-status              # Check training status
+karl sft-eval                # Evaluate trained model
+karl train-dryrun            # Preview training data selection
 
-# Full intelligence report
-karl report
-karl report --json
+# Analysis
+karl report                  # Full intelligence report
+karl skill-breakdown         # Per-skill accuracy and confusion
+karl confusion-resolve       # Resolve confused skill pairs
+karl skill-matrix            # Skill similarity matrix
+karl merge-candidates        # Find mergeable skills
+karl reward-calibration      # Reward distribution analysis
+karl difficulty              # Per-skill difficulty scoring
+karl accuracy-forecast       # Wilson CI accuracy projections
+karl lift-analysis           # Vector lift over regex by skill
 
-# Generate skill embeddings
-karl bootstrap
-karl bootstrap --dry-run
-
-# Generate synthetic QA from git diffs
-karl synthetic --days 14
-karl synthetic --dry-run
-
-# Show/update skill weights
-karl weights
-karl weights --update
-karl weights --update --dry-run
-
-# Extract trajectories from verbose logs
-karl extract
-karl extract --dry-run
+# Automation
+karl cron                    # Run periodic maintenance
+karl auto-refresh            # Refresh centroids and trends
 ```
+
+Run `karl help` for the complete list.
 
 ## Architecture
 
 ```
 karl/
-  config.py              # Centralized configuration (env vars + defaults)
-  trajectory_tap.py      # 4 tap points: init, append, flush, annotate
-  reward_engine.py       # 3-signal composite reward scorer
-  embedding_cache.py     # LRU prompt cache + skill embeddings + vector math
-  weight_updater.py      # EMA weight updates from reward data
-  sft_exporter.py        # Advantage-weighted SFT export (OAPL-Lite)
-  synthetic_qa.py        # Synthetic Q&A from git diffs
-  trajectory_bridge.py   # Shadow analysis, promotion gate, skill health
-  trainer.py             # Remote LoRA training pipeline (SSH + SCP + MLX)
-  bootstrap.py           # Skill embedding generation
-  extractor.py           # Historical trajectory backfill
-  notifications.py       # Discord webhook notifications
-  cli.py                 # Command-line interface
+  # Core pipeline (4 taps)
+  trajectory_tap.py          # Session buffer init, tool event append, flush, annotate
+  reward_engine.py           # 3-signal composite reward scorer
+  embedding_cache.py         # Prompt cache + skill embeddings + centroid management
+  trajectory_bridge.py       # Shadow analysis, promotion, hybrid routing, analytics
+
+  # CLI and automation
+  karl_cli.py                # 67-command CLI
+  karl_cron.py               # Periodic maintenance jobs
+  config.json                # Runtime configuration
+
+  # Training pipeline
+  sft_exporter.py            # Advantage-weighted SFT export (OAPL-Lite)
+  sft_dispatch.py            # Training job dispatch
+  sft_launcher.py            # Remote LoRA training via SSH + MLX
+  karl_trainer.py            # Training orchestration
+  synthetic_qa.py            # Synthetic Q&A from git diffs
+  synthetic_qa_generator.py  # Extended synthetic generation
+  agentic_synth.py           # Agentic synthesis patterns
+  rl2f_data_builder.py       # RL-to-fine-tune data preparation
+
+  # Analysis and evaluation
+  evaluator.py               # Model evaluation
+  trajectory_diversity.py    # Trajectory diversity metrics
+  trajectory_filter.py       # Quality filtering
+  trajectory_extractor.py    # Historical trajectory backfill
+  process_fingerprint.py     # Session fingerprinting
+  flow_sampler.py            # Sampling strategies
+  plasticity_manager.py      # Centroid plasticity control
+
+  # Integration
+  cortex_karl_bridge.py      # Bridge to Cortex rule system
+  shadow_seeder.py           # Shadow record seeding (deprecated)
+  bootstrap_skill_embeddings.py  # Initial embedding generation
+  weight_updater.py          # EMA weight updates
+  metrics_exporter.py        # Prometheus metrics export
+  generate_status.py         # Dashboard status generation
+  notifications.py           # Discord webhook notifications
+
+  # Supporting
+  config.py                  # Environment-based configuration
+  types.py                   # Type definitions
+  bootstrap.py               # Skill embedding bootstrap
+  extractor.py               # Trajectory extraction
+  entity_bridge.py           # Entity resolution
 ```
 
 ### Data Files (generated at runtime)
@@ -141,11 +193,15 @@ karl/
 |------|---------|
 | `trajectories.jsonl` | Append-only trajectory store |
 | `routing_shadow.jsonl` | Shadow routing comparison log |
-| `synthetic_qa.jsonl` | Synthetic training examples from git diffs |
-| `skill_embeddings.pkl` | Pre-computed skill vectors |
-| `prompt_embedding_cache.pkl` | LRU prompt embedding cache |
+| `accuracy_trend.jsonl` | Accuracy metrics over time |
+| `skill_evolution.jsonl` | Skill accuracy changes |
+| `promotion_log.jsonl` | Promotion decision history |
+| `exemplar_registry.jsonl` | Curated exemplar prompts |
 | `train.jsonl` / `valid.jsonl` | SFT training splits |
-| `karl_status.json` | Dashboard status (for Nexus Portal) |
+| `eval-holdout.jsonl` | Held-out evaluation set |
+| `karl-sft.jsonl` | Formatted SFT training data |
+| `config.json` | Runtime routing configuration |
+| `karl_dashboard.json` | Dashboard status |
 
 ## Configuration
 
@@ -171,32 +227,11 @@ export KARL_TRAIN_SSH_ALIAS=mac5
 export KARL_MLX_MODEL=mlx-community/gemma-3-1b-it-4bit
 export KARL_MLX_ITERS=500
 
-# Notifications
-export KARL_DISCORD_WEBHOOK=https://discord.com/api/webhooks/...
+# Canonical writer (multi-node setups)
+export KARL_CANONICAL_WRITER=claude-code-vm
 ```
 
 See `karl/config.py` for the complete list.
-
-## Training Pipeline
-
-KARL uses MLX LoRA fine-tuning on Apple Silicon:
-
-1. **Export**: Filter trajectories by reward, compute advantage, oversample high-reward examples
-2. **Synthetic augmentation**: Generate additional training data from git commit diffs
-3. **Upload**: SCP training data to remote compute node
-4. **Train**: MLX LoRA with configurable model, iterations, layers, learning rate
-5. **Monitor**: Poll training daemon for completion and metrics
-
-```bash
-# Preview what would be exported
-karl export --dry-run
-
-# Full training cycle
-karl train
-
-# Check remote daemon health
-karl train --dry-run
-```
 
 ## Integration
 
@@ -240,7 +275,7 @@ if embedding:
 
 ```bash
 pip install -e ".[dev]"
-pytest
+pytest                                          # 164 tests
 pytest --cov=karl --cov-report=term-missing
 ```
 

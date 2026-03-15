@@ -1,39 +1,47 @@
 """
-weight_updater.py - EMA weight updates for skill embeddings from reward data.
+weight_updater.py — EMA weight updates for skill embeddings from reward data.
 
 Updates trajectory_weight for each skill based on accumulated reward signals.
-Weight bounds: [0.5, 1.5] -- no skill fully suppressed or dominant.
+Weight bounds: [0.5, 1.5] — no skill fully suppressed or dominant.
 
-A skill with consistent corrections (low reward) -> weight trends toward 0.5.
-A skill with consistent success (high reward) -> weight trends toward 1.5.
+A skill with consistent corrections (low reward) → weight trends toward 0.5.
+A skill with consistent success (high reward) → weight trends toward 1.5.
 
 Usage:
-    from karl.weight_updater import update_weights
-    result = update_weights()           # Apply weight updates
-    result = update_weights(dry_run=True)  # Preview changes
+    python3 weight_updater.py              # Update weights from trajectory data
+    python3 weight_updater.py --stats      # Show current weights
+    python3 weight_updater.py --dry-run    # Preview weight changes
 """
 
-import fcntl
 import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from karl.config import STORE_PATH, WEIGHT_ALPHA, WEIGHT_MIN, WEIGHT_MAX
-from karl.embedding_cache import load_skill_embeddings, save_skill_embeddings
+KARL_DIR = Path(__file__).parent
+STORE_PATH = KARL_DIR / "trajectories.jsonl"
+
+sys.path.insert(0, str(KARL_DIR))
+
+from embedding_cache import load_skill_embeddings, save_skill_embeddings
+
+# EMA config
+ALPHA = 0.1      # Learning rate
+WEIGHT_MIN = 0.5
+WEIGHT_MAX = 1.5
 
 
 def _reward_to_target(reward: float) -> float:
     """Map reward [0, 1] to weight target [0.5, 1.5].
 
-    reward=0   -> target=0.5 (penalize)
-    reward=0.5 -> target=1.0 (neutral)
-    reward=1.0 -> target=1.5 (boost)
+    reward=0 → target=0.5 (penalize)
+    reward=0.5 → target=1.0 (neutral)
+    reward=1.0 → target=1.5 (boost)
     """
-    return WEIGHT_MIN + reward * (WEIGHT_MAX - WEIGHT_MIN)
+    return 0.5 + reward
 
 
-def _ema_update(current: float, target: float, alpha: float = WEIGHT_ALPHA) -> float:
+def _ema_update(current: float, target: float, alpha: float = ALPHA) -> float:
     """Exponential moving average weight update with bounds."""
     new = current * (1 - alpha) + target * alpha
     return max(WEIGHT_MIN, min(WEIGHT_MAX, new))
@@ -45,21 +53,18 @@ def collect_skill_rewards() -> Dict[str, List[float]]:
         return {}
 
     rewards_by_skill: Dict[str, List[float]] = {}
-    # C11: Shared lock for consistent read
+
     with open(STORE_PATH) as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_SH)
-        try:
-            for line in f:
-                try:
-                    record = json.loads(line)
-                    skill_name = record.get("skill", {}).get("name")
-                    reward = record.get("outcome", {}).get("reward_score")
-                    if skill_name and reward is not None:
-                        rewards_by_skill.setdefault(skill_name, []).append(reward)
-                except json.JSONDecodeError:
-                    continue
-        finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        for line in f:
+            try:
+                record = json.loads(line)
+                skill_name = record.get("skill", {}).get("name")
+                reward = record.get("outcome", {}).get("reward_score")
+
+                if skill_name and reward is not None:
+                    rewards_by_skill.setdefault(skill_name, []).append(reward)
+            except json.JSONDecodeError:
+                continue
 
     return rewards_by_skill
 
@@ -69,14 +74,10 @@ def update_weights(dry_run: bool = False) -> Dict[str, Any]:
 
     For each skill with reward data:
       1. Compute mean reward from all trajectories
-      2. Map to weight target via _reward_to_target
+      2. Map to weight target
       3. Apply EMA update to current weight
 
-    Args:
-        dry_run: If True, preview changes without saving
-
-    Returns:
-        Stats dict with old/new weights and deltas
+    Returns stats dict with old/new weights.
     """
     skill_embeddings = load_skill_embeddings()
     if not skill_embeddings:
@@ -115,3 +116,32 @@ def update_weights(dry_run: bool = False) -> Dict[str, Any]:
         "dry_run": dry_run,
         "updates": updates,
     }
+
+
+def show_weights() -> None:
+    """Display current skill weights."""
+    embeddings = load_skill_embeddings()
+    rewards = collect_skill_rewards()
+
+    print(f"\nSkill Embedding Weights ({len(embeddings)} skills)")
+    print(f"{'Skill':<20} {'Weight':>8} {'Trajectories':>13} {'Mean Reward':>12}")
+    print("-" * 55)
+
+    for name in sorted(embeddings.keys()):
+        _, weight = embeddings[name]
+        skill_rewards = rewards.get(name, [])
+        n = len(skill_rewards)
+        mean_r = sum(skill_rewards) / n if n > 0 else None
+        mean_str = f"{mean_r:.4f}" if mean_r is not None else "N/A"
+        print(f"{name:<20} {weight:>8.4f} {n:>13} {mean_str:>12}")
+
+
+if __name__ == "__main__":
+    if "--stats" in sys.argv:
+        show_weights()
+    elif "--dry-run" in sys.argv:
+        result = update_weights(dry_run=True)
+        print(json.dumps(result, indent=2))
+    else:
+        result = update_weights()
+        print(f"[weight_updater] {json.dumps(result, indent=2)}")

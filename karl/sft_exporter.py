@@ -1,51 +1,59 @@
+#!/usr/bin/env python3
 """
-sft_exporter.py - Convert KARL trajectories to advantage-weighted SFT data.
+sft_exporter.py — Convert KARL trajectories to advantage-weighted SFT data.
 
-Transforms trajectory records into ChatML JSONL format for LoRA fine-tuning.
-High-reward trajectories are oversampled proportional to their advantage
-following the OAPL-Lite approach.
+Transforms trajectory records into ChatML JSONL format for MLX LoRA training.
+High-reward trajectories are oversampled proportional to their advantage.
 
-Pipeline:
+OAPL-Lite approach:
   1. Filter trajectories with reward scores
-  2. Compute advantage = reward - domain_baseline
-  3. Positive-advantage -> include (up to 3x oversample)
-  4. Negative-advantage -> exclude
-  5. Merge with synthetic QA examples (from synthetic_qa.py)
-  6. Output ChatML JSONL for MLX LoRA training
+  2. Compute advantage = reward - baseline
+  3. Positive-advantage trajectories → include (up to 3x oversample)
+  4. Negative-advantage trajectories → exclude (or include 1x as negative signal)
+  5. Output ChatML JSONL compatible with Mac5's finetune-daemon
+
+Output format (per line):
+{
+  "messages": [
+    {"role": "system", "content": "..."},
+    {"role": "user", "content": "[prompt]"},
+    {"role": "assistant", "content": "[tool plan summary]"}
+  ]
+}
 
 Usage:
-    from karl.sft_exporter import export_sft
-    stats = export_sft()                     # Export to train/valid JSONL
-    stats = export_sft(dry_run=True)         # Preview
-    stats = export_sft(min_reward=0.6)       # Filter by minimum reward
+    python3 sft_exporter.py                    # Export to karl-sft.jsonl
+    python3 sft_exporter.py --stats            # Show export stats
+    python3 sft_exporter.py --dry-run          # Preview without writing
+    python3 sft_exporter.py --min-reward 0.6   # Filter by minimum reward
+    python3 sft_exporter.py --quality high     # Only high-quality sessions
+    python3 sft_exporter.py --quality medium+  # Medium and high quality
 """
 
-import fcntl
-import hashlib
 import json
-import random
-import re
+import hashlib
+import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-import karl.config as config
+KARL_DIR = Path(__file__).parent
+STORE_PATH = KARL_DIR / "trajectories.jsonl"
+OUTPUT_PATH = KARL_DIR / "karl-sft.jsonl"
+TRAIN_PATH = KARL_DIR / "train.jsonl"
+VALID_PATH = KARL_DIR / "valid.jsonl"
 
-# S6: Patterns that may indicate leaked credentials in prompt text
-_CREDENTIAL_PATTERNS = [
-    re.compile(r"(?:api[_-]?key|token|secret|password|passwd|credential)[\s=:]+\S+", re.I),
-    re.compile(r"(?:sk|pk|rk|ak)-[a-zA-Z0-9]{20,}"),  # API key formats
-    re.compile(r"Bearer\s+[a-zA-Z0-9._\-]+"),
-    re.compile(r"ghp_[a-zA-Z0-9]{36}"),  # GitHub PATs
-    re.compile(r"xox[bprs]-[a-zA-Z0-9\-]+"),  # Slack tokens
-    re.compile(r"eyJ[a-zA-Z0-9_\-]{20,}\.[a-zA-Z0-9_\-]{20,}"),  # JWTs
-]
+SYSTEM_PROMPT = (
+    "You are an expert software engineering assistant. Given a task, "
+    "plan the optimal sequence of tool uses to accomplish it efficiently. "
+    "Consider which tools to use, in what order, and what parameters. "
+    "Prefer reading before editing, testing after changes, and using "
+    "the most specific tool available."
+)
 
-
-def _strip_credentials(text: str) -> str:
-    """Remove potential credential patterns from text before including in training data."""
-    for pattern in _CREDENTIAL_PATTERNS:
-        text = pattern.sub("[REDACTED]", text)
-    return text
+# Advantage-weighted oversampling config
+MAX_OVERSAMPLE = 3       # Max times a high-reward trajectory appears
+ADVANTAGE_THRESHOLD = 0.0  # Include if advantage >= this
+MIN_TOOL_EVENTS = 2      # Skip trivial trajectories
 
 
 def _trajectory_to_plan(record: Dict) -> str:
@@ -59,12 +67,13 @@ def _trajectory_to_plan(record: Dict) -> str:
         return ""
 
     parts = []
-    for i, event in enumerate(events[:20], 1):
+    for i, event in enumerate(events[:20], 1):  # Cap at 20 steps
         tool = event.get("tool_name", "?")
         params = event.get("key_params", {})
         success = event.get("success")
         status = "ok" if success else ("fail" if success is False else "?")
 
+        # Build concise step description
         if tool == "Read" and "file_path" in params:
             desc = f"Read {_short_path(params['file_path'])}"
         elif tool == "Edit" and "file_path" in params:
@@ -72,7 +81,8 @@ def _trajectory_to_plan(record: Dict) -> str:
         elif tool == "Write" and "file_path" in params:
             desc = f"Write {_short_path(params['file_path'])}"
         elif tool == "Bash" and "command" in params:
-            desc = f"Bash: {params['command'][:80]}"
+            cmd = params["command"][:80]
+            desc = f"Bash: {cmd}"
         elif tool == "Grep" and "pattern" in params:
             desc = f"Grep '{params['pattern'][:40]}'"
         elif tool == "Glob" and "pattern" in params:
@@ -85,6 +95,7 @@ def _trajectory_to_plan(record: Dict) -> str:
 
         parts.append(f"{i}. [{status}] {desc}")
 
+    # Add outcome summary
     outcome = record.get("outcome", {})
     reward = outcome.get("reward_score")
     total = record.get("trajectory", {}).get("total_tools", 0)
@@ -98,7 +109,7 @@ def _trajectory_to_plan(record: Dict) -> str:
 
 
 def _short_path(path: str) -> str:
-    """Shorten a file path for training data."""
+    """Shorten a file path for the training data."""
     parts = path.split("/")
     if len(parts) > 3:
         return "/".join([".."] + parts[-2:])
@@ -106,78 +117,106 @@ def _short_path(path: str) -> str:
 
 
 def _compute_oversample_count(advantage: float) -> int:
-    """Determine how many times to include based on advantage.
+    """Determine how many times to include this trajectory based on advantage.
 
-    advantage <= 0:   0 (filter out)
-    advantage 0-0.1:  1
-    advantage 0.1-0.3: 2
-    advantage > 0.3:  3 (max)
+    advantage <= 0: include 0 times (filter out)
+    advantage 0-0.1: include 1 time
+    advantage 0.1-0.3: include 2 times
+    advantage > 0.3: include 3 times (max)
     """
-    if advantage <= config.SFT_ADVANTAGE_THRESHOLD:
+    if advantage <= ADVANTAGE_THRESHOLD:
         return 0
     if advantage <= 0.1:
         return 1
     if advantage <= 0.3:
         return 2
-    return config.SFT_MAX_OVERSAMPLE
+    return MAX_OVERSAMPLE
+
+
+QUALITY_LEVELS = {"high": 3, "medium": 2, "low": 1}
+
+
+def _passes_quality_filter(record, quality_filter):
+    """Check if a trajectory passes the quality filter.
+    quality_filter: None (no filter), "high", "medium+", "low+"
+    """
+    if quality_filter is None:
+        return True
+    grade = record.get("quality", {}).get("grade", "medium")
+    level = QUALITY_LEVELS.get(grade, 2)
+    if quality_filter == "high":
+        return level >= 3
+    elif quality_filter == "medium+" or quality_filter == "medium":
+        return level >= 2
+    elif quality_filter == "low+":
+        return level >= 1
+    return True
 
 
 def export_sft(
     min_reward: float = 0.0,
     dry_run: bool = False,
-    train_split: Optional[float] = None,
+    train_split: float = 0.9,
+    quality_filter: str = None,
 ) -> Dict[str, Any]:
     """Export trajectories to advantage-weighted SFT format.
 
     Args:
-        min_reward: Minimum reward score to include
-        dry_run: Preview without writing files
-        train_split: Train/valid split ratio (default from config)
+        quality_filter: "high", "medium+", or None for no filter.
 
-    Returns:
-        Stats dict with counts, baselines, and file paths
+    Returns stats dict.
     """
-    split = train_split if train_split is not None else config.SFT_TRAIN_SPLIT
-
-    if not config.STORE_PATH.exists():
+    if not STORE_PATH.exists():
         return {"error": "No trajectory store found"}
 
-    # C10: Lock store for consistent read during export
+    # Load all scored trajectories
     records = []
-    with open(config.STORE_PATH) as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_SH)
-        try:
-            for line in f:
-                try:
-                    record = json.loads(line)
-                    reward = record.get("outcome", {}).get("reward_score")
-                    if reward is not None and reward >= min_reward:
-                        records.append(record)
-                except json.JSONDecodeError:
-                    continue
-        finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    filtered_quality = 0
+    with open(STORE_PATH) as f:
+        for line in f:
+            try:
+                record = json.loads(line)
+                reward = record.get("outcome", {}).get("reward_score")
+                if reward is not None and reward >= min_reward:
+                    if not _passes_quality_filter(record, quality_filter):
+                        filtered_quality += 1
+                        continue
+                    records.append(record)
+            except json.JSONDecodeError:
+                continue
 
     if not records:
         return {"total": 0, "message": "No scored trajectories found"}
 
-    # Compute domain baselines
+    # Use FlowRL balanced sampling if available
+    use_flowrl = "--flowrl" in sys.argv if not dry_run else False
+    if use_flowrl:
+        try:
+            from flow_sampler import FlowRLSampler
+            sampler = FlowRLSampler()
+            records = sampler.sample(strategy="balanced", size=min(len(records), 80))
+        except ImportError:
+            pass
+
+    # Compute domain baselines for advantage
     domain_rewards: Dict[str, List[float]] = {}
     for r in records:
         domain = r.get("skill", {}).get("domain") or "_global"
-        domain_rewards.setdefault(domain, []).append(r["outcome"]["reward_score"])
+        domain_rewards.setdefault(domain, []).append(
+            r["outcome"]["reward_score"]
+        )
     baselines = {k: sum(v) / len(v) for k, v in domain_rewards.items()}
 
     # Generate SFT examples with advantage weighting
     examples = []
-    seen_hashes: set = set()
+    seen_hashes = set()
     filtered_low_advantage = 0
     filtered_too_short = 0
     oversampled = 0
 
     for record in records:
         events = record.get("trajectory", {}).get("events", [])
-        if len(events) < config.SFT_MIN_TOOL_EVENTS:
+        if len(events) < MIN_TOOL_EVENTS:
             filtered_too_short += 1
             continue
 
@@ -191,7 +230,8 @@ def export_sft(
             filtered_low_advantage += 1
             continue
 
-        prompt = _strip_credentials(record.get("context", {}).get("prompt_text", ""))
+        # Build the training example
+        prompt = record.get("context", {}).get("prompt_text", "")
         if not prompt or len(prompt) < 10:
             prompt = f"[Task in {record.get('context', {}).get('cwd', 'unknown project')}]"
 
@@ -199,31 +239,37 @@ def export_sft(
         if not plan or len(plan) < 20:
             continue
 
-        content_hash = hashlib.sha256((prompt + plan).encode()).hexdigest()[:16]
+        # Deduplicate
+        content_hash = hashlib.sha256(
+            (prompt + plan).encode()
+        ).hexdigest()[:16]
         if content_hash in seen_hashes:
             continue
         seen_hashes.add(content_hash)
 
         example = {
             "messages": [
-                {"role": "system", "content": config.SFT_SYSTEM_PROMPT},
+                {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt[:4000]},
                 {"role": "assistant", "content": plan[:4000]},
             ]
         }
 
+        # Add multiple copies for oversampling
         for _ in range(count):
             examples.append(example)
         if count > 1:
             oversampled += count - 1
 
-    # Merge synthetic QA data
+    # Include synthetic QA data (Phase 6)
     synthetic_count = 0
-    if config.SYNTHETIC_PATH.exists():
-        with open(config.SYNTHETIC_PATH) as f:
+    synthetic_path = KARL_DIR / "synthetic_qa.jsonl"
+    if synthetic_path.exists():
+        with open(synthetic_path) as f:
             for line in f:
                 try:
                     syn_example = json.loads(line)
+                    # Deduplicate against trajectory examples
                     msgs = syn_example.get("messages", [])
                     if len(msgs) >= 3:
                         syn_hash = hashlib.sha256(
@@ -242,39 +288,44 @@ def export_sft(
             "examples": 0,
             "filtered_low_advantage": filtered_low_advantage,
             "filtered_too_short": filtered_too_short,
+            "filtered_quality": filtered_quality,
+            "quality_filter": quality_filter,
         }
 
     if dry_run:
+        print(f"\n[dry-run] Would write {len(examples)} examples")
+        print(f"Sample:\n{json.dumps(examples[0], indent=2)[:500]}")
         return {
             "total_records": len(records),
             "examples": len(examples),
             "unique": len(seen_hashes),
             "oversampled": oversampled,
-            "synthetic": synthetic_count,
             "filtered_low_advantage": filtered_low_advantage,
             "filtered_too_short": filtered_too_short,
+            "filtered_quality": filtered_quality,
+            "quality_filter": quality_filter,
             "baselines": {k: round(v, 4) for k, v in baselines.items()},
         }
 
     # Write combined output
-    config.SFT_OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(config.SFT_OUTPUT_PATH, "w") as f:
+    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(OUTPUT_PATH, "w") as f:
         for ex in examples:
             f.write(json.dumps(ex) + "\n")
 
     # Train/valid split
+    import random
     random.seed(42)
-    shuffled = list(examples)
-    random.shuffle(shuffled)
-    split_idx = int(len(shuffled) * split)
-    train_examples = shuffled[:split_idx]
-    valid_examples = shuffled[split_idx:]
+    random.shuffle(examples)
+    split_idx = int(len(examples) * train_split)
+    train_examples = examples[:split_idx]
+    valid_examples = examples[split_idx:]
 
-    with open(config.TRAIN_PATH, "w") as f:
+    with open(TRAIN_PATH, "w") as f:
         for ex in train_examples:
             f.write(json.dumps(ex) + "\n")
 
-    with open(config.VALID_PATH, "w") as f:
+    with open(VALID_PATH, "w") as f:
         for ex in valid_examples:
             f.write(json.dumps(ex) + "\n")
 
@@ -288,8 +339,106 @@ def export_sft(
         "valid": len(valid_examples),
         "filtered_low_advantage": filtered_low_advantage,
         "filtered_too_short": filtered_too_short,
+        "filtered_quality": filtered_quality,
+        "quality_filter": quality_filter,
         "baselines": {k: round(v, 4) for k, v in baselines.items()},
-        "output": str(config.SFT_OUTPUT_PATH),
-        "train_file": str(config.TRAIN_PATH),
-        "valid_file": str(config.VALID_PATH),
+        "output": str(OUTPUT_PATH),
+        "train_file": str(TRAIN_PATH),
+        "valid_file": str(VALID_PATH),
     }
+
+
+def check_sft_readiness(min_high_quality: int = 30, min_skills: int = 5) -> Dict[str, Any]:
+    """Check if we have enough data for meaningful SFT training.
+
+    Criteria:
+      - min_high_quality high/medium quality trajectories with tool events
+      - min_skills distinct skills represented
+      - Positive advantage data available
+    """
+    from collections import Counter
+
+    if not STORE_PATH.exists():
+        return {"status": "no_data", "ready": False}
+
+    records = []
+    with open(STORE_PATH) as f:
+        for line in f:
+            try:
+                r = json.loads(line)
+                if r.get("outcome", {}).get("reward_score") is not None:
+                    records.append(r)
+            except json.JSONDecodeError:
+                continue
+
+    if not records:
+        return {"status": "no_scored_data", "ready": False}
+
+    # Quality breakdown
+    quality_counts = Counter()
+    skill_counts = Counter()
+    exportable = 0
+    for r in records:
+        grade = r.get("quality", {}).get("grade", "unknown")
+        quality_counts[grade] += 1
+        skill = r.get("skill", {}).get("name", "unknown")
+        skill_counts[skill] += 1
+        # Check if exportable (has tool events in trajectory or context)
+        tools = r.get("trajectory", {}).get("events", []) or r.get("context", {}).get("tool_events", [])
+        if len(tools) >= MIN_TOOL_EVENTS:
+            exportable += 1
+
+    high_quality = quality_counts.get("high", 0) + quality_counts.get("medium", 0)
+    distinct_skills = len(skill_counts)
+
+    # Compute mean advantage
+    rewards = [r["outcome"]["reward_score"] for r in records]
+    mean_reward = sum(rewards) / len(rewards)
+    positive_advantage = sum(1 for r in rewards if r > mean_reward)
+
+    ready = high_quality >= min_high_quality and distinct_skills >= min_skills
+
+    return {
+        "status": "ok",
+        "ready": ready,
+        "total_scored": len(records),
+        "exportable": exportable,
+        "quality": dict(quality_counts),
+        "high_quality_count": high_quality,
+        "min_high_quality_required": min_high_quality,
+        "distinct_skills": distinct_skills,
+        "min_skills_required": min_skills,
+        "top_skills": dict(skill_counts.most_common(10)),
+        "mean_reward": round(mean_reward, 4),
+        "positive_advantage_count": positive_advantage,
+        "recommendation": (
+            "READY: Sufficient data for SFT training. Run 'karl export' to generate."
+            if ready else
+            f"NOT READY: Need {max(0, min_high_quality - high_quality)} more high-quality + "
+            f"{max(0, min_skills - distinct_skills)} more skills."
+        ),
+    }
+
+
+def _parse_args():
+    min_r = 0.0
+    quality = None
+    for i, arg in enumerate(sys.argv):
+        if arg == "--min-reward" and i + 1 < len(sys.argv):
+            min_r = float(sys.argv[i + 1])
+        if arg == "--quality" and i + 1 < len(sys.argv):
+            quality = sys.argv[i + 1]
+    return min_r, quality
+
+
+if __name__ == "__main__":
+    min_r, quality = _parse_args()
+    if "--stats" in sys.argv:
+        stats = export_sft(dry_run=True, quality_filter=quality)
+        print(json.dumps(stats, indent=2))
+    elif "--dry-run" in sys.argv:
+        stats = export_sft(min_reward=min_r, dry_run=True, quality_filter=quality)
+        print(json.dumps(stats, indent=2))
+    else:
+        stats = export_sft(min_reward=min_r, quality_filter=quality)
+        print(f"[sft_exporter] {json.dumps(stats, indent=2)}")
