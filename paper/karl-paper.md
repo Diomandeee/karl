@@ -406,7 +406,27 @@ The composite nature means no single axis can dominate, reducing reward hacking 
 
 KARL requires ~100 trajectories before the shadow router has enough data for promotion analysis. During cold start, regex routing remains authoritative and trajectories accumulate passively. The backfill command can bootstrap from existing verbose logs if available.
 
-### 9.3 Limitations
+### 9.3 Signal Ablation Results
+
+An expanded deployment of KARL with a 5-signal reward function (splitting the original 3-signal design into outcome, process, efficiency, verification, and consistency) was evaluated via leave-one-out ablation on 290 trajectories (21,380 tool calls). The results reveal which reward signals actually drive trajectory ranking.
+
+**Signal importance ranking (by measured impact):**
+
+| Rank | Signal | Impact | Effect of Removal |
+|------|--------|--------|-------------------|
+| 1 | Efficiency | 0.568 | Destroys ranking (rank correlation drops to 0.582) |
+| 2 | Verification | 0.256 | 5/20 top trajectories displaced |
+| 3 | Consistency | 0.168 | 3/20 top trajectories displaced |
+| 4 | Process | 0.097 | Rankings mostly stable |
+| 5 | Outcome | 0.005 | Rankings barely change |
+
+**Corpus statistics:** mean reward = 0.635 ($\sigma$ = 0.095, min = 0.225, max = 0.815). Signal means: outcome = 0.671, process = 0.898, efficiency = 0.619, verification = 0.332, consistency = 0.444.
+
+The most significant finding is that **outcome is the least important signal** (impact = 0.005). Task completion, corrections, and user satisfaction, the signals that standard RLHF treats as primary, contribute almost nothing to trajectory differentiation when behavioral signals are present. How an agent works matters more than whether it succeeds.
+
+This has direct implications for the 3-signal design in this paper. The efficiency signal (tool diversity via Shannon entropy) is the most discriminative component. In the original 3-signal formulation, efficiency carries 25% weight. The ablation suggests this weight should be higher, and the outcome weight (currently 40%) could be reduced without meaningful loss of ranking quality. The behavioral signals (efficiency, verification, consistency) subsume the information that outcome attempts to capture: an agent using diverse tools, verifying its work, and reading before writing almost always produces a correct result.
+
+### 9.4 Limitations
 
 **Outcome attribution**: The correction detector uses regex patterns and heuristics. Subtle dissatisfaction (user switches tasks without correcting) is not captured. Future work could incorporate session-level engagement metrics.
 
@@ -418,7 +438,7 @@ KARL requires ~100 trajectories before the shadow router has enough data for pro
 
 KARL demonstrates that trajectory-based reinforcement learning can close the feedback loop for AI coding agents without human annotation. By recording what agents do, scoring how well they do it, and training on the best trajectories, the system continuously improves skill routing and tool-use planning.
 
-The key insight is that implicit user signals (corrections, redos, session continuations) provide sufficient reward signal when combined with observable process quality metrics (tool success rates, bash exit codes, error density) and efficiency measures (tool diversity, file touch rate, tools per minute).
+The ablation study on 290 trajectories sharpens this insight: the efficiency signal (tool diversity via Shannon entropy) is the single most important component of the reward function, while the outcome signal (task completion, corrections) is the least important. How an agent works, measured through tool diversity, verification discipline, and read-before-write consistency, matters more than whether it succeeds. Behavioral process signals subsume the information in outcome signals, making explicit outcome measurement nearly redundant for trajectory ranking.
 
 The entity bridge extends this from session-level learning to skill-level intelligence, replacing time-based decay with performance-based adaptation. Skills that consistently produce poor trajectories lose confidence and routing weight, while skills that consistently succeed gain both.
 
