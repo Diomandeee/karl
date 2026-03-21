@@ -1,0 +1,70 @@
+{
+  "n_trajectories": 290,
+  "reward_stats": {
+    "mean": 0.6349457075757213,
+    "std": 0.0952967645064049,
+    "min": 0.22499999999999998,
+    "max": 0.815091909824386
+  },
+  "signal_stats": {
+    "outcome": {
+      "mean": 0.6710344827586208,
+      "std": 0.0886039162980573
+    },
+    "process": {
+      "mean": 0.8977263234179492,
+      "std": 0.22420674996188272
+    },
+    "efficiency": {
+      "mean": 0.6188298103254681,
+      "std": 0.34707616841839534
+    },
+    "verification": {
+      "mean": 0.33172413793103445,
+      "std": 0.10808901075015208
+    },
+    "consistency": {
+      "mean": 0.4441379310344827,
+      "std": 0.12532763245904052
+    }
+  },
+  "ablation": [
+    {
+      "signal": "efficiency",
+      "rank_correlation": 0.5823892284585778,
+      "top20_overlap": 17,
+      "impact": 0.5676107715414223
+    },
+    {
+      "signal": "verification",
+      "rank_correlation": 0.9943534528886522,
+      "top20_overlap": 15,
+      "impact": 0.2556465471113478
+    },
+    {
+      "signal": "consistency",
+      "rank_correlation": 0.982397100953679,
+      "top20_overlap": 17,
+      "impact": 0.16760289904632095
+    },
+    {
+      "signal": "process",
+      "rank_correlation": 0.9032396547418867,
+      "top20_overlap": 20,
+      "impact": 0.09676034525811328
+    },
+    {
+      "signal": "outcome",
+      "rank_correlation": 0.9954024628608893,
+      "top20_overlap": 20,
+      "impact": 0.004597537139110708
+    }
+  ],
+  "weights": {
+    "outcome": 0.3,
+    "process": 0.25,
+    "efficiency": 0.15,
+    "verification": 0.15,
+    "consistency": 0.15
+  }
+}
