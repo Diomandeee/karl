@@ -1,0 +1,10 @@
+{
+  "lora_parameters": {
+    "rank": 16,
+    "alpha": 32,
+    "dropout": 0.05,
+    "scale": 2.0
+  },
+  "lora_layers": 36,
+  "model_type": "qwen3"
+}

@@ -4,7 +4,6 @@
 
 **Mohamed Diomande**
 
-OpenClaw Systems
 
 March 2026
 

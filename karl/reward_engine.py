@@ -27,12 +27,13 @@ from typing import Any, Dict, List, Optional, Tuple
 KARL_DIR = Path(__file__).parent
 STORE_PATH = KARL_DIR / "trajectories.jsonl"
 
-# Weight coefficients for composite reward (5-signal)
-W_OUTCOME = 0.30
-W_PROCESS = 0.25
-W_EFFICIENCY = 0.15
-W_VERIFICATION = 0.15
-W_CONSISTENCY = 0.15
+# Weight coefficients for composite reward (6-signal)
+W_OUTCOME = 0.25
+W_PROCESS = 0.22
+W_EFFICIENCY = 0.13
+W_VERIFICATION = 0.13
+W_CONSISTENCY = 0.13
+W_MOTION = 0.14  # Wasted motion penalty (inspired by TPO linearity)
 
 
 def compute_reward(record: Dict) -> Dict[str, Any]:
@@ -67,13 +68,17 @@ def compute_reward(record: Dict) -> Dict[str, Any]:
     # --- Consistency Score ---
     consistency_score, consistency_components = _compute_consistency(trajectory)
 
-    # --- Composite (5-signal) ---
+    # --- Wasted Motion Score (TPO-inspired linearity) ---
+    motion_score, motion_components = _compute_wasted_motion(trajectory)
+
+    # --- Composite (6-signal) ---
     composite = (
         W_OUTCOME * outcome_score
         + W_PROCESS * process_score
         + W_EFFICIENCY * efficiency_score
         + W_VERIFICATION * verification_score
         + W_CONSISTENCY * consistency_score
+        + W_MOTION * motion_score
     )
 
     return {
@@ -83,6 +88,7 @@ def compute_reward(record: Dict) -> Dict[str, Any]:
         "efficiency_score": round(efficiency_score, 4),
         "verification_score": round(verification_score, 4),
         "consistency_score": round(consistency_score, 4),
+        "motion_score": round(motion_score, 4),
         "components": {
             **outcome_components,
             **process_components,
@@ -374,6 +380,87 @@ def _compute_consistency(trajectory: Dict) -> Tuple[float, Dict]:
     return max(0.0, min(1.0, consistency)), {
         "r_read_before_write": round(rbw_score, 4),
         "r_no_thrashing": round(no_thrash, 4),
+    }
+
+
+def _compute_wasted_motion(trajectory: Dict) -> Tuple[float, Dict]:
+    """
+    Wasted motion penalty inspired by TPO's linearity score.
+
+    In linear agent sessions, "branching" manifests as:
+      - Tool retries: same tool called 3+ times in a row (agent stuck in a loop)
+      - Read-without-act: reading files without editing (exploration that goes nowhere)
+      - Error retry loops: Bash fail → Bash fail → Bash fail (not learning from errors)
+      - Undo patterns: Write then Edit same file immediately (didn't think first)
+
+    Score: 1.0 = clean forward motion, 0.0 = pure thrashing.
+    Formula: exp(-lambda * waste_count) where waste_count is total wasted actions.
+    """
+    events = trajectory.get("events", [])
+    total = trajectory.get("total_tools", 0)
+
+    if total < 3:
+        return 0.8, {"r_retry_loops": 0, "r_read_waste": 0.0, "r_error_loops": 0, "r_undo": 0}
+
+    # 1. Tool retry loops: same tool 3+ times consecutively
+    retry_loops = 0
+    streak = 1
+    for i in range(1, len(events)):
+        curr = events[i].get("tool_name", "")
+        prev = events[i - 1].get("tool_name", "")
+        if curr == prev and curr:
+            streak += 1
+            if streak >= 3:
+                retry_loops += 1
+        else:
+            streak = 1
+
+    # 2. Read waste: reads that never lead to writes on the same file
+    read_files = []
+    written_files = set()
+    for e in events:
+        tool = e.get("tool_name", "")
+        fp = e.get("key_params", {}).get("file_path", "")
+        if tool == "Read" and fp:
+            read_files.append(fp)
+        elif tool in ("Write", "Edit") and fp:
+            written_files.add(fp)
+    reads_without_write = sum(1 for f in read_files if f not in written_files)
+    read_waste = reads_without_write / max(len(read_files), 1) if read_files else 0.0
+
+    # 3. Error retry loops: consecutive Bash failures
+    error_loops = 0
+    bash_fail_streak = 0
+    for e in events:
+        if e.get("tool_name") == "Bash" and e.get("success") is False:
+            bash_fail_streak += 1
+            if bash_fail_streak >= 2:
+                error_loops += 1
+        else:
+            bash_fail_streak = 0
+
+    # 4. Undo patterns: Write/Edit same file within 2 steps
+    undo_count = 0
+    for i in range(1, min(len(events), len(events))):
+        curr = events[i]
+        prev = events[i - 1]
+        if (curr.get("tool_name") in ("Edit", "Write") and
+                prev.get("tool_name") in ("Write", "Edit")):
+            curr_fp = curr.get("key_params", {}).get("file_path", "")
+            prev_fp = prev.get("key_params", {}).get("file_path", "")
+            if curr_fp and curr_fp == prev_fp:
+                undo_count += 1
+
+    # Composite: exp(-lambda * waste)
+    waste = retry_loops * 2 + error_loops * 1.5 + undo_count * 1 + read_waste * total * 0.3
+    lam = 0.15
+    score = math.exp(-lam * waste)
+
+    return max(0.0, min(1.0, score)), {
+        "r_retry_loops": retry_loops,
+        "r_read_waste": round(read_waste, 4),
+        "r_error_loops": error_loops,
+        "r_undo": undo_count,
     }
 
 

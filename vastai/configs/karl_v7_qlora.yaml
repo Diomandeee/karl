@@ -1,0 +1,55 @@
+model:
+  base_model: Qwen/Qwen3-4B-Instruct-2507
+  max_seq_len: 1024
+  gradient_checkpointing: true
+
+qlora:
+  load_in_4bit: true
+  bnb_4bit_quant_type: nf4
+  bnb_4bit_compute_dtype: bfloat16
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+training:
+  # Stage 1: SFT (2284 examples, ~1500 steps)
+  output_dir: runs/karl-v7-sft
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 16
+  learning_rate: 2.0e-4
+  warmup_ratio: 0.03
+  lr_scheduler_type: cosine
+  max_steps: 1500
+  logging_steps: 20
+  save_steps: 300
+  eval_steps: 300
+  bf16: true
+  optim: paged_adamw_8bit
+  weight_decay: 0.0
+  seed: 42
+
+dpo:
+  # Stage 2: DPO (173 pairs, ~200 steps)
+  enabled: true
+  output_dir: runs/karl-v7-sft-dpo
+  beta: 0.1
+  max_steps: 200
+  learning_rate: 5.0e-5
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  train_file: /workspace/data/v7-dpo-train.jsonl
+
+data:
+  train_mix:
+    sft: 1.0
+  train_files:
+    sft: /workspace/data/v7-sft-train.jsonl
+  eval_file: /workspace/data/v7-sft-eval.jsonl
+
+anticipation:
+  use_inscription: true
+  use_gate: true
+  use_lse_loop: false
+  trajectory_dims: 7
+  commitment_threshold: 0.8
