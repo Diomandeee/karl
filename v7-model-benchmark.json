@@ -1,0 +1,212 @@
+[
+  {
+    "model": "MiniMax M2.5",
+    "id": "MiniMaxAI/MiniMax-M2.5",
+    "avg_score": 1.0,
+    "pass_rate": 1.0,
+    "avg_latency": 7.048546981811524,
+    "prompts": [
+      "Next let's add clap CLI args - I need host, port, subject, and stream name. Then handle reconnection logic - it should auto-reconnect on disconnect and backoff if the server is down.",
+      "the import error \u2014 what's the right way to import TwinClient? either fix it or show me what you need to make it work. we need that /chat endpoint running.",
+      "so what's available from meshd :9451 - what endpoints can we hit and what's the response shape? I want to see what we're working with before building the status cards.",
+      "NATS isn't running on localhost:4222. The mesh has it on Mac5 or the cloud-vm at 100.114.92.88. Check which one and connect there instead, or start it locally if we need a local instance. What's the quickest path forward?",
+      "how did cargo test go? just want to confirm before we run the final integration test against the actual endpoint - once that passes we can ship it."
+    ],
+    "scores": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  {
+    "model": "GPT-OSS 120B",
+    "id": "openai/gpt-oss-120b",
+    "avg_score": 1.0,
+    "pass_rate": 1.0,
+    "avg_latency": 5.519090986251831,
+    "prompts": [
+      "can we extend /Users/m/Desktop/mesh-event-viewer/src/main.rs with clap to accept `--subject`, `--durable`, and a `--timeout` flag, and then wire in NATS reconnection logic using exponential backoff and a health check callback? make sure the args feed straight into the JetStream subscription setup.<|end|><|start|>assistant<|channel|>final<|message|>can we extend /Users/m/Desktop/mesh-event-viewer/src/main.rs with clap to accept `--subject`, `--durable`, and a `--timeout` flag, and then wire in NA",
+      "Looks like the ImportError in /Users/m/Desktop/twin-api/main.py is from the wrong TwinClient import\u2014swap it for the correct path from the MLX twin package, then scaffold a /chat FastAPI route that accepts a message, calls the client, and returns the response JSON, and finally run the server to verify it works.",
+      "I think we should add the status cards directly in\u202fapp/page.tsx, then set up a server\u2011side fetch to\u202fhttp://localhost:9451/status\u202fso the dashboard updates in real time\u2014can we implement getServerSideProps that pulls the mesh data and maps it to those cards?",
+      "I think we should check if the NATS server is actually listening on :4222\u2014run `lsof -i :4222` or `brew services list | grep nats` on Mac1, restart the service if it's not up, then fire a quick test with `nats-pub test.event \"hello\"` and see if the connection error disappears.",
+      "I think we should add an integration test that posts a couple of sample prompts to the /classify route, checks the returned inscription tags, and then run cargo test again. Can you create tests/integration_test.rs targeting src/main.rs and wire it up so we can verify the final step?"
+    ],
+    "scores": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  {
+    "model": "DeepSeek R1",
+    "id": "deepseek-ai/DeepSeek-R1-0528",
+    "avg_score": 1.0,
+    "pass_rate": 1.0,
+    "avg_latency": 10.439544200897217,
+    "prompts": [
+      "Let's add clap for the CLI args first \u2014 make sure we have --nats-url, --user-cred, and --stream flags. Required args. Then handle NATS reconnects properly. Remember last week's issue with Mac3 disconnects? Implement exponential backoff like our Go services do.",
+      "So we have the ImportError for TwinClient in main.py. I thought we set that up already. Can you create twin_client.py and put it in the same directory? Define TwinClient there to connect to MLX on Mac5:8100. Then update the import in main to use it. After that, add the /chat endpoint.",
+      "Now that we have page.tsx scaffolded, let's add the five status cards first. Keep them simple: hostname, status badge, last pulse timestamp. After that, wire up server-side polling to meshd on :9451 - make sure we handle Mac1 through Mac5 separately in case any are down.",
+      "Connection refused on 4222 \u2014 so is NATS even running on Mac1? Check the server status first with `nats-server --version` and see if we need to start it. Then verify the bridge code uses localhost:4222, not the cloud VM IP. Fix that if wrong and retest publishing.",
+      "What's the cargo test output? If it passed, run the integration test: start the server and curl a real prompt to classify. Show the response. Make sure the inscription matches what's expected. Then commit the code."
+    ],
+    "scores": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  {
+    "model": "GPT-5.4-mini",
+    "id": "gpt-5.4-mini",
+    "avg_score": 1.0,
+    "pass_rate": 1.0,
+    "avg_latency": 1.5688038349151612,
+    "prompts": [
+      "I think we should keep going in /Users/m/Desktop/mesh-event-viewer and finish the next step in src/main.rs. Add the clap args first, and then handle NATS reconnection after that. Make sure it stays simple and doesn't drift into extra architecture, because I just want the CLI wired cleanly to the JetStream events right now.",
+      "Can you look at /Users/m/Desktop/twin-api/main.py and fix the ImportError for TwinClient first, because right now that import is blocking the whole FastAPI service, and then add the /chat endpoint so it can actually wrap the MLX twin on :8100? Let's keep it tight, don't branch off into anything else, and make sure the file is runnable after the import fix.",
+      "I think we should keep moving on /Users/m/Desktop/mesh-pulse/app/page.tsx and just add the status cards first, but make sure the design is already set up to poll meshd on :9451 for Mac1 through Mac5 without stalling on the scaffold. Can you show me the current shape of the Next.js page, then wire the server-side polling in a way that\u2019s reliable and doesn\u2019t cut corners, and after that tell me exactly what\u2019s left for step 2?",
+      "Can you take a look at the NATS bridge in /Users/m/Desktop/nats-bridge and fix the ConnectionRefusedError on localhost:4222 first, because right now the curl just failed and we\u2019re stuck before we can even test publishing. I want you to orient on what\u2019s actually running on Mac1 or cloud-vm, check the NATS service status, and then get us to the point where the next step is just publishing a mesh event and verifying it.",
+      "Can we run the final integration test in /Users/m/Desktop/inscription-router now, and if it fails just trace it back through src/main.rs and tell me exactly what broke, what the current state is, and what still needs to be verified before we close this out?"
+    ],
+    "scores": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  {
+    "model": "GLM 4.7",
+    "id": "zai-org/GLM-4.7",
+    "avg_score": 0.985,
+    "pass_rate": 1.0,
+    "avg_latency": 5.5893806457519535,
+    "prompts": [
+      "I think we've got main.rs started, so let's add the clap CLI args now. Make sure we're connecting to NATS on :4222 since that's where meshd is running. After that, handle the reconnection logic properly so we don't drop events when the mesh reconnects.",
+      "I think we need to fix that import error in main.py since TwinClient isn't actually available. Let's check what the actual MLX client class is called and then add the chat endpoint.",
+      "So we've got the scaffold in page.tsx. Can we add the status cards and get the server-side polling working for meshd :9451? I think that would be the logical next step.",
+      "Can we check if NATS is actually running? The connection's being refused on port 4222, so I think we need to make sure the service is up before we can test any publishing.",
+      "Did the tests pass? I think we need to run the integration test to make sure the HTTP service is actually classifying prompts into inscriptions correctly. Let's verify it's working before we commit."
+    ],
+    "scores": [
+      0.925,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  {
+    "model": "DeepSeek V3.1",
+    "id": "deepseek-ai/DeepSeek-V3.1",
+    "avg_score": 0.985,
+    "pass_rate": 1.0,
+    "avg_latency": 2.7697519779205324,
+    "prompts": [
+      "I think we should add the CLI args next using clap - can we make it take a subject pattern and maybe a timeout flag? Let's keep it simple but make sure it's robust enough for the reconnection logic we'll need later.",
+      "Let's check the MLX server endpoints first to see what we're actually calling. Did you verify the twin model is actually serving on :8100 and what the input format should be? And then fix those TwinClient imports properly this time.",
+      "I think we should add the status cards first and make sure they can poll :9451 from each Mac. Can we use server actions for the polling or should we set up API routes?",
+      "I think we should check if NATS is actually running on :4222 \u2014 maybe it's on a different port or not started at all. Can you check the processes and see what ports are listening? And while you're at it, make sure meshd isn't trying to use the same port on Mac1.",
+      "We just ran cargo test but didn't see output. Let's make sure the integration test actually handles HTTP requests properly - maybe add a simple curl test case to verify the classification endpoint works end-to-end."
+    ],
+    "scores": [
+      0.925,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  {
+    "model": "GPT-OSS 20B",
+    "id": "openai/gpt-oss-20b",
+    "avg_score": 0.984,
+    "pass_rate": 1.0,
+    "avg_latency": 4.403902387619018,
+    "prompts": [
+      "I think we need to add clap arguments for the JetStream subject and server URL, then wrap the NATS connect in a reconnect loop with exponential backoff. In main.rs, after the current 200 lines, add a struct with `--subject` and `--url` flags, parse them, and modify the connection logic to retry on disconnect events and handle graceful shutdown. Can you set that up?",
+      "I think the ImportError comes from importing TwinClient wrong. In /Users/m/Desktop/twin-api/main.py the line `from twin import TwinClient` should point to the MLX wrapper, like `from mlx_twin.client import TwinClient`. Once that import resolves, we can add a `/chat` POST that accepts a JSON body with a message and forwards it to the TwinClient instance. Can you update the import and sketch the endpoint?",
+      "I want to add status cards to /app/page.tsx.",
+      "Check if NATS is running: `ps -ef | grep nats` and, if not, start it with `nats-server -DV` from /Users/m/Desktop/nats-bridge. Then run `curl localhost:4222` again to confirm the broker is reachable.",
+      "Can we add an integration test in src/main.rs that exercises the /classify endpoint with a few example prompts and run it via cargo test? I need it to hit the HTTP layer and confirm the routing logic."
+    ],
+    "scores": [
+      1.0,
+      1.0,
+      0.92,
+      1.0,
+      1.0
+    ]
+  },
+  {
+    "model": "GLM-5",
+    "id": "zai-org/GLM-5",
+    "avg_score": 0.8,
+    "pass_rate": 0.8,
+    "avg_latency": 16.568415117263793,
+    "prompts": [
+      "let's build it and see if it compiles, then add the clap args for filtering by subject",
+      "So we have the ImportError on TwinClient in main.py. Is that something we need to create or is it coming from another module? Let's figure out where that should come from and then get the /chat endpoint added.",
+      "so we have page.tsx scaffolded. can we spin up the dev server and see what it looks like? then we'll add the status cards for each Mac",
+      "so the connection is refused on 4222. Is NATS even running? Can we check the service status and figure out what's blocking it?",
+      "[FAILED]"
+    ],
+    "scores": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      0.0
+    ]
+  },
+  {
+    "model": "Kimi K2.5",
+    "id": "moonshotai/Kimi-K2.5",
+    "avg_score": 0.385,
+    "pass_rate": 0.4,
+    "avg_latency": 21.221601009368896,
+    "prompts": [
+      "what's actually in main.rs right now? I see 200 lines but does it handle reconnection if the NATS connection on :4222 flakes out, or does it just die? let's add exponential backoff for that first, and then get clap in place so we can pass stream and consumer names as args. don't hardcode the stream - I need this to work across different JetStream streams on the mesh.",
+      "since we're hitting that ImportError on TwinClient in main.py, what's actually exported from the MLX module on Mac5:8100? don't assume it's called TwinClient \u2014 check the source or do a quick inspect to see what classes are available. once you figure out the right import, fix it and then let's implement the /chat endpoint. make sure we're building the server wrapper correctly and not accidentally instantiating a client here.",
+      "[FAILED]",
+      "[FAILED]",
+      "[FAILED]"
+    ],
+    "scores": [
+      1.0,
+      0.925,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  {
+    "model": "Qwen3.5 397B",
+    "id": "Qwen/Qwen3.5-397B-A17B",
+    "avg_score": 0.0,
+    "pass_rate": 0.0,
+    "avg_latency": 25.449598789215088,
+    "prompts": [
+      "[FAILED]",
+      "[FAILED]",
+      "[FAILED]",
+      "[FAILED]",
+      "[FAILED]"
+    ],
+    "scores": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  }
+]

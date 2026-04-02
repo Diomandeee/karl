@@ -1,0 +1,11 @@
+torch>=2.1
+transformers>=4.38
+accelerate>=0.25
+peft>=0.7
+bitsandbytes>=0.42
+datasets>=2.16
+wandb
+numpy
+scipy
+scikit-learn
+pyyaml
