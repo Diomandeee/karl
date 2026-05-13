@@ -36,6 +36,87 @@ W_CONSISTENCY = 0.13
 W_MOTION = 0.14  # Wasted motion penalty (inspired by TPO linearity)
 
 
+def _derive_scoring_fields(trajectory: Dict) -> Dict:
+    """
+    Materialize the derivative fields the scoring sub-functions read,
+    from the on-disk trajectory schema.
+
+    On disk every record stores `tool_calls: [{tool, input_preview,
+    success, duration_ms}]` plus `tool_count` and `tool_types`. The
+    scoring sub-functions historically expected `events: [{tool_name,
+    success, key_params}]` plus `total_tools`, `tool_counts` (per-tool
+    map), `successes`, `failures`, `bash_errors`. Without this bridge,
+    every record falls back to 0.5 across every signal.
+
+    Returns a new dict (shallow copy of the input) with the derivative
+    fields filled. Records that already have those fields (older format
+    or future writers) are left intact — present keys take precedence
+    over derived values.
+    """
+    if not isinstance(trajectory, dict):
+        return {}
+
+    out = dict(trajectory)
+    tool_calls = trajectory.get("tool_calls") or []
+    if not isinstance(tool_calls, list):
+        tool_calls = []
+
+    # events: tool_calls re-keyed to {tool_name, success, key_params}
+    if "events" not in out or not out["events"]:
+        events: List[Dict] = []
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                continue
+            params = tc.get("key_params") or {}
+            if not isinstance(params, dict):
+                params = {}
+            # Best-effort key_params hydration: parse input_preview if it
+            # looks like a JSON object so Bash command/file_path checks fire.
+            if not params and isinstance(tc.get("input_preview"), str):
+                preview = tc["input_preview"].strip()
+                if preview.startswith("{") and preview.endswith("}"):
+                    try:
+                        parsed = json.loads(preview)
+                        if isinstance(parsed, dict):
+                            params = parsed
+                    except json.JSONDecodeError:
+                        pass
+            events.append({
+                "tool_name": tc.get("tool"),
+                "success": tc.get("success"),
+                "key_params": params,
+                "duration_ms": tc.get("duration_ms"),
+            })
+        out["events"] = events
+
+    # total_tools: prefer existing -> tool_count -> len(events)
+    if not out.get("total_tools"):
+        out["total_tools"] = trajectory.get("tool_count") or len(out["events"])
+
+    # tool_counts: per-tool frequency map
+    if not out.get("tool_counts"):
+        counts: Dict[str, int] = {}
+        for e in out["events"]:
+            name = e.get("tool_name") or "unknown"
+            counts[name] = counts.get(name, 0) + 1
+        out["tool_counts"] = counts
+
+    # successes / failures: derived from event.success
+    if out.get("successes") is None:
+        out["successes"] = sum(1 for e in out["events"] if e.get("success") is True)
+    if out.get("failures") is None:
+        out["failures"] = sum(1 for e in out["events"] if e.get("success") is False)
+
+    # bash_errors: failed Bash invocations
+    if out.get("bash_errors") is None:
+        out["bash_errors"] = sum(
+            1 for e in out["events"]
+            if e.get("tool_name") == "Bash" and e.get("success") is False
+        )
+
+    return out
+
+
 def compute_reward(record: Dict) -> Dict[str, Any]:
     """
     Compute multi-signal reward for a trajectory record.
@@ -48,7 +129,7 @@ def compute_reward(record: Dict) -> Dict[str, Any]:
       - components: dict with individual signal values
     """
     outcome = record.get("outcome", {})
-    trajectory = record.get("trajectory", {})
+    trajectory = _derive_scoring_fields(record.get("trajectory", {}))
     timing = record.get("timing", {})
 
     # --- Outcome Score (cross-turn signals) ---
@@ -525,7 +606,10 @@ def backfill_rewards(force: bool = False) -> Dict[str, int]:
     for line in lines:
         try:
             record = json.loads(line)
-            domain = record.get("skill", {}).get("domain")
+            # `skill` is a routing-label string and `domain` is a sibling
+            # top-level string in the on-disk format (not nested inside skill).
+            # Fall back to `_global` when domain is missing.
+            domain = record.get("domain")
             existing_reward = record.get("outcome", {}).get("reward_score")
             if existing_reward is not None:
                 bucket = domain or "_global"
@@ -577,7 +661,7 @@ def backfill_rewards(force: bool = False) -> Dict[str, int]:
             reward_data = compute_reward(record)
 
             # Compute z-score advantage
-            domain = record.get("skill", {}).get("domain") or "_global"
+            domain = record.get("domain") or "_global"
             baseline = domain_baselines.get(domain, 0.5)
             std = domain_stds.get(domain, 1.0)
             advantage = compute_advantage(
@@ -593,6 +677,7 @@ def backfill_rewards(force: bool = False) -> Dict[str, int]:
             outcome["efficiency_score"] = reward_data["efficiency_score"]
             outcome["verification_score"] = reward_data.get("verification_score")
             outcome["consistency_score"] = reward_data.get("consistency_score")
+            outcome["motion_score"] = reward_data.get("motion_score")
             outcome["advantage"] = round(advantage, 4)
             outcome["annotation_status"] = "scored"
             record["outcome"] = outcome
@@ -645,7 +730,7 @@ def get_reward_stats() -> Dict[str, Any]:
                         rewards.append(r)
                         ch = record.get("channel", "unknown")
                         by_channel.setdefault(ch, []).append(r)
-                        domain = record.get("skill", {}).get("domain") or "_global"
+                        domain = record.get("domain") or "_global"
                         by_domain.setdefault(domain, []).append(r)
                 except json.JSONDecodeError:
                     continue
