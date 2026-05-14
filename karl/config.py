@@ -32,7 +32,14 @@ def _env_int(key: str, default: int) -> int:
 # ---------------------------------------------------------------------------
 
 KARL_DIR = _env_path("KARL_DIR", str(Path(__file__).parent.parent))
-DATA_DIR = _env_path("KARL_DATA_DIR", str(KARL_DIR / "data"))
+# DATA_DIR defaults to the package directory (karl/karl/), NOT karl/data/.
+# That is where trajectories.jsonl, the SFT splits, buffers/, and status
+# actually live — ratified by three independent writers (reward_engine,
+# sft_exporter, the flows-karl-writer daemon). The old karl/data/ default
+# pointed at an empty directory, which silently broke the train pipeline's
+# upload step ("No training data files"): export wrote to karl/karl/ while
+# upload looked in karl/data/. Override with KARL_DATA_DIR to relocate.
+DATA_DIR = _env_path("KARL_DATA_DIR", str(Path(__file__).parent))
 BUFFER_DIR = DATA_DIR / "buffers"
 STORE_PATH = DATA_DIR / "trajectories.jsonl"
 SHADOW_PATH = DATA_DIR / "routing_shadow.jsonl"
