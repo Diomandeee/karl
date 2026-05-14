@@ -299,6 +299,9 @@ def _compute_efficiency(trajectory: Dict, timing: Dict) -> Tuple[float, Dict]:
       - Tool diversity: more diverse = usually better (read→edit→test vs 50x Bash)
       - Duration efficiency: very long sessions with few tools = inefficient
       - File touch rate: proportion of Write/Edit vs Read-only
+      - Sustained work: long sessions that stayed productive are real work,
+        not a code smell — offsets the diversity penalty for legitimate
+        Bash-heavy investigation/deploy sessions.
     """
     total = trajectory.get("total_tools", 0)
     tool_counts = trajectory.get("tool_counts", {})
@@ -306,7 +309,12 @@ def _compute_efficiency(trajectory: Dict, timing: Dict) -> Tuple[float, Dict]:
     duration = timing.get("duration_s")
 
     if total == 0:
-        return 0.5, {"r_diversity": 0.5, "r_duration_eff": 0.5, "r_file_touch": 0.5}
+        return 0.5, {
+            "r_diversity": 0.5,
+            "r_duration_eff": 0.5,
+            "r_file_touch": 0.5,
+            "r_sustained": 0.5,
+        }
 
     # Tool diversity: Shannon entropy normalized by log(total unique)
     unique_tools = len(tool_counts)
@@ -341,13 +349,43 @@ def _compute_efficiency(trajectory: Dict, timing: Dict) -> Tuple[float, Dict]:
     )
     file_touch = min(1.0, mutation_count / max(total * 0.3, 1))
 
-    # Weighted blend
-    efficiency = diversity * 0.35 + duration_eff * 0.35 + file_touch * 0.30
+    # Sustained-work credit: session-length normalization. A long session
+    # that stayed productive (high success rate) is real engineering work
+    # — a 28-step Bash investigation where every call succeeded should not
+    # score below a 3-step flow just because Bash dominates its tool mix.
+    # Gated on success rate so it can never reward a long failing loop.
+    successes = trajectory.get("successes", 0) or 0
+    failures = trajectory.get("failures", 0) or 0
+    obs = successes + failures
+    success_rate = successes / obs if obs > 0 else 1.0
+    if total >= 20:
+        if success_rate >= 0.85:
+            # ramp 0.5 -> 1.0 across total in [20, 60]
+            length_factor = min(1.0, (total - 20) / 40.0)
+            sustained = 0.5 + 0.5 * length_factor
+        else:
+            # long AND failure-prone = genuinely inefficient
+            sustained = 0.4
+    elif total >= 8:
+        sustained = 0.6  # medium sessions: mild positive
+    else:
+        sustained = 0.5  # short sessions: neutral, neither rewarded nor punished
+
+    # Weighted blend. Diversity + duration de-weighted to make room for the
+    # sustained component; the three "shape" signals now share 0.70 and
+    # sustained carries 0.30.
+    efficiency = (
+        diversity * 0.25
+        + duration_eff * 0.25
+        + file_touch * 0.20
+        + sustained * 0.30
+    )
 
     return max(0.0, min(1.0, efficiency)), {
         "r_diversity": round(diversity, 4),
         "r_duration_eff": round(duration_eff, 4),
         "r_file_touch": round(file_touch, 4),
+        "r_sustained": round(sustained, 4),
     }
 
 
@@ -483,20 +521,35 @@ def _compute_wasted_motion(trajectory: Dict) -> Tuple[float, Dict]:
     if total < 3:
         return 0.8, {"r_retry_loops": 0, "r_read_waste": 0.0, "r_error_loops": 0, "r_undo": 0}
 
-    # 1. Tool retry loops: same tool 3+ times consecutively
+    # 1. Tool retry loops: a run of 3+ consecutive same-tool calls is only
+    #    "wasted motion" if the run contains failures. A long run of
+    #    *successful* same-tool calls (Bash-Bash-Bash for investigation or
+    #    deployment, Read-Read-Read for a survey) is normal forward motion,
+    #    not a stuck loop. Count distinct failing streaks, not per-position
+    #    — the old per-position counter made a clean 28-step Bash session
+    #    score retry_loops=26 and collapse to ~0.0004.
     retry_loops = 0
-    streak = 1
-    for i in range(1, len(events)):
-        curr = events[i].get("tool_name", "")
-        prev = events[i - 1].get("tool_name", "")
-        if curr == prev and curr:
-            streak += 1
-            if streak >= 3:
-                retry_loops += 1
-        else:
-            streak = 1
+    i = 0
+    n = len(events)
+    while i < n:
+        tool_i = events[i].get("tool_name", "")
+        j = i
+        while j < n and events[j].get("tool_name", "") == tool_i and tool_i:
+            j += 1
+        run_len = j - i
+        if run_len >= 3:
+            run_failures = sum(
+                1 for k in range(i, j) if events[k].get("success") is False
+            )
+            if run_failures > 0:
+                retry_loops += 1  # one genuinely-stuck streak
+        i = j if j > i else i + 1
 
-    # 2. Read waste: reads that never lead to writes on the same file
+    # 2. Read waste: reads that never lead to writes on the same file.
+    #    This is a rate in [0, 1] — keep it length-independent. The old
+    #    `read_waste * total * 0.3` term scaled the penalty with session
+    #    length, so investigation sessions (read-heavy by nature) were
+    #    punished for being long, not for being wasteful.
     read_files = []
     written_files = set()
     for e in events:
@@ -532,8 +585,9 @@ def _compute_wasted_motion(trajectory: Dict) -> Tuple[float, Dict]:
             if curr_fp and curr_fp == prev_fp:
                 undo_count += 1
 
-    # Composite: exp(-lambda * waste)
-    waste = retry_loops * 2 + error_loops * 1.5 + undo_count * 1 + read_waste * total * 0.3
+    # Composite: exp(-lambda * waste). read_waste now contributes a
+    # length-independent rate term (cap 3.0) instead of scaling with total.
+    waste = retry_loops * 2 + error_loops * 1.5 + undo_count * 1 + read_waste * 3.0
     lam = 0.15
     score = math.exp(-lam * waste)
 
