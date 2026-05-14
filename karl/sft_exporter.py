@@ -170,6 +170,13 @@ def export_sft(
         return {"error": "No trajectory store found"}
 
     # Load all scored trajectories
+    # _derive_scoring_fields materializes events/total_tools/etc. from the
+    # on-disk tool_calls schema so the exporter's `events` lookups resolve.
+    try:
+        from karl.reward_engine import _derive_scoring_fields
+    except ImportError:
+        _derive_scoring_fields = None  # type: ignore
+
     records = []
     filtered_quality = 0
     with open(STORE_PATH) as f:
@@ -181,6 +188,10 @@ def export_sft(
                     if not _passes_quality_filter(record, quality_filter):
                         filtered_quality += 1
                         continue
+                    if _derive_scoring_fields is not None:
+                        record["trajectory"] = _derive_scoring_fields(
+                            record.get("trajectory", {})
+                        )
                     records.append(record)
             except json.JSONDecodeError:
                 continue
@@ -198,10 +209,11 @@ def export_sft(
         except ImportError:
             pass
 
-    # Compute domain baselines for advantage
+    # Compute domain baselines for advantage. `domain` is a top-level
+    # string on disk, not nested under `skill` (which is a label string).
     domain_rewards: Dict[str, List[float]] = {}
     for r in records:
-        domain = r.get("skill", {}).get("domain") or "_global"
+        domain = r.get("domain") or "_global"
         domain_rewards.setdefault(domain, []).append(
             r["outcome"]["reward_score"]
         )
@@ -221,7 +233,7 @@ def export_sft(
             continue
 
         reward = record["outcome"]["reward_score"]
-        domain = record.get("skill", {}).get("domain") or "_global"
+        domain = record.get("domain") or "_global"
         baseline = baselines.get(domain, 0.5)
         advantage = reward - baseline
 
@@ -381,10 +393,18 @@ def check_sft_readiness(min_high_quality: int = 30, min_skills: int = 5) -> Dict
     for r in records:
         grade = r.get("quality", {}).get("grade", "unknown")
         quality_counts[grade] += 1
-        skill = r.get("skill", {}).get("name", "unknown")
+        # `skill` is a routing-label string on disk, not a nested dict.
+        skill = r.get("skill") or "unknown"
         skill_counts[skill] += 1
-        # Check if exportable (has tool events in trajectory or context)
-        tools = r.get("trajectory", {}).get("events", []) or r.get("context", {}).get("tool_events", [])
+        # Check if exportable (has tool events in trajectory or context).
+        # On-disk schema is `tool_calls`; older/synthetic records may use
+        # `events` or context.tool_events — accept any.
+        traj = r.get("trajectory", {})
+        tools = (
+            traj.get("tool_calls")
+            or traj.get("events")
+            or r.get("context", {}).get("tool_events", [])
+        )
         if len(tools) >= MIN_TOOL_EVENTS:
             exportable += 1
 
