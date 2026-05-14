@@ -36,11 +36,17 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# Paths come from config.py — the single source of truth. Redefining them
+# here previously shadowed config and caused export to write to one place
+# while the trainer's upload step read from another.
+from karl.config import (  # noqa: E402
+    STORE_PATH,
+    SFT_OUTPUT_PATH as OUTPUT_PATH,
+    TRAIN_PATH,
+    VALID_PATH,
+)
+
 KARL_DIR = Path(__file__).parent
-STORE_PATH = KARL_DIR / "trajectories.jsonl"
-OUTPUT_PATH = KARL_DIR / "karl-sft.jsonl"
-TRAIN_PATH = KARL_DIR / "train.jsonl"
-VALID_PATH = KARL_DIR / "valid.jsonl"
 
 SYSTEM_PROMPT = (
     "You are an expert software engineering assistant. Given a task, "

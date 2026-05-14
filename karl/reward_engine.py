@@ -25,7 +25,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 KARL_DIR = Path(__file__).parent
-STORE_PATH = KARL_DIR / "trajectories.jsonl"
+# STORE_PATH comes from config.py — the single source of truth — so the
+# reward engine, the SFT exporter, and the trainer can never disagree on
+# where trajectories.jsonl lives.
+from karl.config import STORE_PATH  # noqa: E402
 
 # Weight coefficients for composite reward (6-signal)
 W_OUTCOME = 0.25
