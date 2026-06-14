@@ -14,6 +14,7 @@ Data flows: hooks → session buffer (JSON) → trajectories.jsonl (append-only)
 import fcntl
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -453,6 +454,41 @@ def flush_session(
     return None
 
 
+# --- Secret redaction (security) -------------------------------------------
+# Trajectories capture raw tool commands, which can contain credentials. We
+# strip anything credential-shaped before it is ever persisted to disk so the
+# dataset (and any git history) can never carry a live secret again.
+_SECRET_PATTERNS = [
+    re.compile(r"sbp_[A-Za-z0-9]{40,}"),                       # Supabase personal access token
+    re.compile(r"hf_[A-Za-z0-9]{30,}"),                        # Hugging Face token
+    re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}"),                 # Anthropic API key
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),                        # OpenAI / generic sk- key
+    re.compile(r"gh[posru]_[A-Za-z0-9]{36,}"),                 # GitHub PAT/OAuth/refresh tokens
+    re.compile(r"github_pat_[A-Za-z0-9_]{50,}"),               # GitHub fine-grained PAT
+    re.compile(r"xox[baprs]-[A-Za-z0-9\-]{10,}"),              # Slack tokens
+    re.compile(r"AKIA[0-9A-Z]{16}"),                           # AWS access key id
+    re.compile(r"AIza[0-9A-Za-z_\-]{35}"),                     # Google API key
+    re.compile(r"eyJ[A-Za-z0-9_\-]{15,}\.[A-Za-z0-9_\-]{15,}\.[A-Za-z0-9_\-]{8,}"),  # JWT (Supabase service/anon keys)
+]
+
+
+def redact_secrets(obj: Any) -> Any:
+    """Recursively replace credential-looking tokens with ``[REDACTED]``.
+
+    Applied to every record before persistence so secrets captured from tool
+    commands never reach trajectories.jsonl. Safe on nested dicts/lists.
+    """
+    if isinstance(obj, str):
+        for pat in _SECRET_PATTERNS:
+            obj = pat.sub("[REDACTED]", obj)
+        return obj
+    if isinstance(obj, dict):
+        return {k: redact_secrets(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [redact_secrets(v) for v in obj]
+    return obj
+
+
 def append_to_store(record: Dict) -> bool:
     """Append a trajectory record to trajectories.jsonl with file locking.
 
@@ -461,6 +497,7 @@ def append_to_store(record: Dict) -> bool:
     which sync to the canonical node for eventual flush.
     """
     record = normalize_record(record)
+    record = redact_secrets(record)  # security: never persist credentials
     if not IS_CANONICAL_WRITER and STORE_PATH == DEFAULT_STORE_PATH:
         return True  # Silently skip — buffer will sync and flush on canonical node
     try:
