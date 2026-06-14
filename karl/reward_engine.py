@@ -1,13 +1,17 @@
 """
 reward_engine.py — Multi-signal reward computation for KARL trajectories.
 
-Computes a composite reward score from three signal levels:
+Computes a composite reward score from six signal levels:
   1. Outcome reward  — cross-turn signals (correction, redo, session continuation)
   2. Process reward  — within-turn signals (exit codes, error rate, tool success)
   3. Efficiency score — duration, tool count, file modification patterns
+  4. Verification score — tests, builds, and read-after-write loops
+  5. Consistency score — coherent tool ordering and low thrash
+  6. Wasted motion score — direct, adaptive progress without repeated loops
 
 The composite reward is a weighted blend:
-  reward = 0.40 * outcome + 0.35 * process + 0.25 * efficiency
+  reward = 0.25 * outcome + 0.22 * process + 0.13 * efficiency
+         + 0.13 * verification + 0.13 * consistency + 0.14 * motion
 
 All scores normalized to [0, 1]. Higher = better trajectory.
 
@@ -28,15 +32,24 @@ KARL_DIR = Path(__file__).parent
 # STORE_PATH comes from config.py — the single source of truth — so the
 # reward engine, the SFT exporter, and the trainer can never disagree on
 # where trajectories.jsonl lives.
-from karl.config import STORE_PATH  # noqa: E402
+from karl.config import (  # noqa: E402
+    REWARD_W_CONSISTENCY,
+    REWARD_W_EFFICIENCY,
+    REWARD_W_MOTION,
+    REWARD_W_OUTCOME,
+    REWARD_W_PROCESS,
+    REWARD_W_VERIFICATION,
+    STORE_PATH,
+)
+from karl.schema import normalize_record, normalize_trajectory  # noqa: E402
 
 # Weight coefficients for composite reward (6-signal)
-W_OUTCOME = 0.25
-W_PROCESS = 0.22
-W_EFFICIENCY = 0.13
-W_VERIFICATION = 0.13
-W_CONSISTENCY = 0.13
-W_MOTION = 0.14  # Wasted motion penalty (inspired by TPO linearity)
+W_OUTCOME = REWARD_W_OUTCOME
+W_PROCESS = REWARD_W_PROCESS
+W_EFFICIENCY = REWARD_W_EFFICIENCY
+W_VERIFICATION = REWARD_W_VERIFICATION
+W_CONSISTENCY = REWARD_W_CONSISTENCY
+W_MOTION = REWARD_W_MOTION
 
 
 def _derive_scoring_fields(trajectory: Dict) -> Dict:
@@ -56,68 +69,7 @@ def _derive_scoring_fields(trajectory: Dict) -> Dict:
     or future writers) are left intact — present keys take precedence
     over derived values.
     """
-    if not isinstance(trajectory, dict):
-        return {}
-
-    out = dict(trajectory)
-    tool_calls = trajectory.get("tool_calls") or []
-    if not isinstance(tool_calls, list):
-        tool_calls = []
-
-    # events: tool_calls re-keyed to {tool_name, success, key_params}
-    if "events" not in out or not out["events"]:
-        events: List[Dict] = []
-        for tc in tool_calls:
-            if not isinstance(tc, dict):
-                continue
-            params = tc.get("key_params") or {}
-            if not isinstance(params, dict):
-                params = {}
-            # Best-effort key_params hydration: parse input_preview if it
-            # looks like a JSON object so Bash command/file_path checks fire.
-            if not params and isinstance(tc.get("input_preview"), str):
-                preview = tc["input_preview"].strip()
-                if preview.startswith("{") and preview.endswith("}"):
-                    try:
-                        parsed = json.loads(preview)
-                        if isinstance(parsed, dict):
-                            params = parsed
-                    except json.JSONDecodeError:
-                        pass
-            events.append({
-                "tool_name": tc.get("tool"),
-                "success": tc.get("success"),
-                "key_params": params,
-                "duration_ms": tc.get("duration_ms"),
-            })
-        out["events"] = events
-
-    # total_tools: prefer existing -> tool_count -> len(events)
-    if not out.get("total_tools"):
-        out["total_tools"] = trajectory.get("tool_count") or len(out["events"])
-
-    # tool_counts: per-tool frequency map
-    if not out.get("tool_counts"):
-        counts: Dict[str, int] = {}
-        for e in out["events"]:
-            name = e.get("tool_name") or "unknown"
-            counts[name] = counts.get(name, 0) + 1
-        out["tool_counts"] = counts
-
-    # successes / failures: derived from event.success
-    if out.get("successes") is None:
-        out["successes"] = sum(1 for e in out["events"] if e.get("success") is True)
-    if out.get("failures") is None:
-        out["failures"] = sum(1 for e in out["events"] if e.get("success") is False)
-
-    # bash_errors: failed Bash invocations
-    if out.get("bash_errors") is None:
-        out["bash_errors"] = sum(
-            1 for e in out["events"]
-            if e.get("tool_name") == "Bash" and e.get("success") is False
-        )
-
-    return out
+    return normalize_trajectory(trajectory)
 
 
 def compute_reward(record: Dict) -> Dict[str, Any]:
@@ -131,8 +83,9 @@ def compute_reward(record: Dict) -> Dict[str, Any]:
       - efficiency_score: float [0, 1]
       - components: dict with individual signal values
     """
+    record = normalize_record(record)
     outcome = record.get("outcome", {})
-    trajectory = _derive_scoring_fields(record.get("trajectory", {}))
+    trajectory = record.get("trajectory", {})
     timing = record.get("timing", {})
 
     # --- Outcome Score (cross-turn signals) ---
@@ -164,6 +117,12 @@ def compute_reward(record: Dict) -> Dict[str, Any]:
         + W_CONSISTENCY * consistency_score
         + W_MOTION * motion_score
     )
+    hard_failure_cap = None
+    total_tools = trajectory.get("total_tools", 0)
+    failures = trajectory.get("failures", 0)
+    if total_tools and failures >= total_tools and outcome_score <= 0.25:
+        hard_failure_cap = 0.29
+        composite = min(composite, hard_failure_cap)
 
     return {
         "reward_score": round(composite, 4),
@@ -179,6 +138,7 @@ def compute_reward(record: Dict) -> Dict[str, Any]:
             **efficiency_components,
             **verification_components,
             **consistency_components,
+            **({"r_hard_failure_cap": hard_failure_cap} if hard_failure_cap is not None else {}),
         },
     }
 
@@ -662,7 +622,7 @@ def backfill_rewards(force: bool = False) -> Dict[str, int]:
     domain_rewards = {}
     for line in lines:
         try:
-            record = json.loads(line)
+            record = normalize_record(json.loads(line))
             # `skill` is a routing-label string and `domain` is a sibling
             # top-level string in the on-disk format (not nested inside skill).
             # Fall back to `_global` when domain is missing.
@@ -707,12 +667,12 @@ def backfill_rewards(force: bool = False) -> Dict[str, int]:
     # Second pass: compute and annotate
     for line in lines:
         try:
-            record = json.loads(line)
+            record = normalize_record(json.loads(line))
             existing = record.get("outcome", {}).get("reward_score")
 
             if existing is not None and not force:
                 skipped += 1
-                updated_lines.append(line)
+                updated_lines.append(json.dumps(record, default=str) + "\n")
                 continue
 
             reward_data = compute_reward(record)
@@ -781,7 +741,7 @@ def get_reward_stats() -> Dict[str, Any]:
         with open(STORE_PATH, "r") as f:
             for line in f:
                 try:
-                    record = json.loads(line)
+                    record = normalize_record(json.loads(line))
                     r = record.get("outcome", {}).get("reward_score")
                     if r is not None:
                         rewards.append(r)

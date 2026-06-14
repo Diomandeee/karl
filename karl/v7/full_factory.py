@@ -51,9 +51,9 @@ GOAL_LIBRARY = [
         "constraints": ["Make sure cargo build passes with no warnings.", "Don't add unnecessary dependencies."],
     },
     {
-        "goal": "Build a Rust binary that watches a JSONL file for new lines, computes reward scores using 5-signal composite, and publishes scored entries to NATS subject karl.scored. Include --backfill flag.",
+        "goal": "Build a Rust binary that watches a JSONL file for new lines, computes reward scores using the six-signal composite, and publishes scored entries to NATS subject karl.scored. Include --backfill flag.",
         "project_dir": "~/Desktop/factory/karl-scorer-rs",
-        "constraints": ["Keep in mind the reward engine has 5 signals.", "Don't recompute already-scored entries."],
+        "constraints": ["Keep in mind the reward engine has six signals.", "Don't recompute already-scored entries."],
     },
     {
         "goal": "Build a Rust daemon that manages tmux pane slots across 5 machines via SSH. HTTP API at :9451 with /inject, /read, /status endpoints. Use tokio + axum.",
@@ -182,7 +182,7 @@ GOAL_LIBRARY = [
         "constraints": ["Keep in mind MLX adapters need adapter_config.json + adapters.safetensors.", "Don't run on Mac1."],
     },
     {
-        "goal": "Build a Rust binary that implements a 5-signal reward engine for scoring agent trajectories. Signals: outcome, process, efficiency, verification, consistency. Output composite score to stdout as JSON.",
+        "goal": "Build a Rust binary that implements a six-signal reward engine for scoring agent trajectories. Signals: outcome, process, efficiency, verification, consistency, motion. Output composite score to stdout as JSON.",
         "project_dir": "~/Desktop/factory/reward-engine-rs",
         "constraints": ["Make sure all scores normalize to [0, 1].", "Use serde for JSON serialization."],
     },

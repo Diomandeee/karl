@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-karl — Unified CLI for KARL (Knowledge Agents via Reinforcement Learning).
+karl — Unified CLI for the KARL Trajectory Memory Ledger implementation.
 
 Usage:
     karl status          Full status report (JSON)

@@ -1,17 +1,17 @@
-# KARL: Knowledge Agents via Reinforcement Learning
+# Trajectory Memory Ledger
 
-## Trajectory-Based Intelligence for AI Coding Agents
+## Schema-Normalized Experience Replay for Self-Improving Coding Agents
 
 **Mohamed Diomande**
 
 
-March 2026
+June 2026
 
 ---
 
 ## Abstract
 
-We present KARL, a trajectory-based reinforcement learning framework for improving AI coding agent performance through closed-loop feedback. KARL records complete tool-use sequences during real coding sessions, scores them using a three-signal composite reward function (outcome quality, process efficiency, tool-use patterns), and uses the highest-scoring trajectories to improve future agent behavior via LoRA fine-tuning and learned skill routing. Unlike approaches that rely on static benchmarks or human preference labels, KARL derives training signal entirely from observable agent behavior and implicit user feedback (corrections, redos, session continuations). We describe the system architecture, the reward function design, an advantage-weighted supervised fine-tuning approach we call OAPL-Lite, and an entity bridge that enables performance-based skill decay. Deployed across a multi-machine mesh serving 80+ operational skills, KARL demonstrates that trajectory-based learning can close the feedback loop between agent performance and agent improvement with zero human annotation effort.
+We present the Trajectory Memory Ledger, implemented in KARL, a schema-normalized experience replay system for improving AI coding agent performance through closed-loop feedback. The ledger records complete tool-use sequences during real coding sessions, normalizes them into an append-only schema, scores them using a six-signal composite reward function (outcome, process, efficiency, verification, consistency, and wasted motion), and uses the highest-scoring trajectories to generate advantage-weighted supervised fine-tuning data. Unlike approaches that rely on static benchmarks or human preference labels, the Trajectory Memory Ledger derives training signal from observable agent behavior and implicit user feedback. The current normalized deployment corpus contains 7,468 scored trajectories, 67,409 observed tool events, and 73,470 recovered tool steps across 50+ active projects. From this store, KARL exports 3,678 ChatML training examples (3,310 train / 368 validation). We describe the system architecture, schema normalization, reward design, OAPL-Lite export, and entity bridge for performance-based skill decay.
 
 ---
 
@@ -21,33 +21,33 @@ AI coding agents powered by large language models have reached the point where t
 
 This variance is not random. It correlates with the nature of the task, the skill being applied, the agent's routing decision, and patterns in the tool-use sequence itself. Yet most agent frameworks treat each session as independent, learning nothing from the trajectory of past interactions.
 
-KARL addresses this gap with three contributions:
+The Trajectory Memory Ledger addresses this gap with three contributions:
 
 1. **Trajectory Recording**: A four-tap instrumentation system that captures complete tool-use sequences with timing, parameters, success/failure signals, and cross-turn outcome annotations, all within a 500ms hook budget.
 
-2. **Three-Signal Reward Engine**: A composite scoring function that evaluates trajectories on outcome quality (was the user satisfied?), process quality (did tools work correctly?), and efficiency (was the approach parsimonious?), without requiring any human labels.
+2. **Six-Signal Reward Engine**: A composite scoring function that evaluates trajectories on outcome quality, process quality, efficiency, verification, consistency, and wasted motion, without requiring explicit human labels.
 
 3. **Advantage-Weighted Training Pipeline**: An OAPL-Lite approach that oversamples high-advantage trajectories up to 3x for LoRA fine-tuning, combined with a shadow routing system that learns when vector-based skill selection outperforms regex matching.
 
-KARL runs as a lightweight Python library that integrates with any agent framework supporting hook events. It has been deployed in production across a five-machine mesh orchestrating 80+ operational skills, recording trajectories continuously and training LoRA adapters weekly.
+KARL is the lightweight Python implementation of the ledger. It integrates with any agent framework supporting hook events and has been deployed across a five-machine mesh orchestrating 80+ operational skills, with batch backfill and live flow capture feeding one normalized trajectory store.
 
 ## 2. Related Work
 
-**Agent Benchmarks.** SWE-Bench (Jimenez et al., 2024) and similar benchmarks evaluate agent coding ability on curated tasks with known solutions. These provide point-in-time measurements but not continuous improvement signals. KARL complements benchmarks by learning from the distribution of real tasks the agent actually encounters.
+**Agent Benchmarks.** SWE-Bench (Jimenez et al., 2024) and similar benchmarks evaluate agent coding ability on curated tasks with known solutions. These provide point-in-time measurements but not continuous improvement signals. The Trajectory Memory Ledger complements benchmarks by learning from the distribution of real tasks the agent actually encounters.
 
-**RLHF and Preference Learning.** Reinforcement Learning from Human Feedback (Ouyang et al., 2022) has become standard for language model alignment. Constitutional AI (Bai et al., 2022) reduces annotation burden through model self-critique. KARL avoids both by deriving reward from observable behavior: tool success rates, user corrections, and session outcomes require no explicit human labeling.
+**RLHF and Preference Learning.** Reinforcement Learning from Human Feedback (Ouyang et al., 2022) has become standard for language model alignment. Constitutional AI (Bai et al., 2022) reduces annotation burden through model self-critique. The ledger avoids both by deriving reward from observable behavior: tool success rates, user corrections, and session outcomes require no explicit human labeling.
 
-**Process Reward Models.** Lightman et al. (2023) showed that rewarding correct reasoning steps, not just final answers, improves mathematical problem-solving. KARL's process score operates on the same principle: a trajectory where 10/10 tools succeed is scored higher than one where 7/10 succeed even if both reach the same outcome.
+**Process Reward Models.** Lightman et al. (2023) showed that rewarding correct reasoning steps, not just final answers, improves mathematical problem-solving. The ledger's process score operates on the same principle: a trajectory where 10/10 tools succeed is scored higher than one where 7/10 succeed even if both reach the same outcome.
 
-**Agent Training.** Databricks' Agent Training work (2025) introduced the concept of trajectory-based learning for coding agents, capturing tool-use sequences and using them for fine-tuning. KARL extends this with explicit advantage weighting, entity-level performance tracking, and an automated pipeline from recording through training.
+**Agent Training.** Databricks' Agent Training work (2025) introduced the concept of trajectory-based learning for coding agents, capturing tool-use sequences and using them for fine-tuning. The Trajectory Memory Ledger extends this with explicit advantage weighting, entity-level performance tracking, and an automated pipeline from recording through training.
 
-**Skill Routing.** Mixture of Experts (Shazeer et al., 2017) and more recent router-based architectures select among specialized models. KARL's routing is simpler but analogous: given a prompt, select which operational skill (a structured SKILL.md document with workflow steps, gotchas, and trigger patterns) best applies. The innovation is learning routing from trajectory outcomes rather than static heuristics.
+**Skill Routing.** Mixture of Experts (Shazeer et al., 2017) and more recent router-based architectures select among specialized models. The ledger's routing is simpler but analogous: given a prompt, select which operational skill (a structured SKILL.md document with workflow steps, gotchas, and trigger patterns) best applies. The innovation is learning routing from trajectory outcomes rather than static heuristics.
 
 ## 3. System Architecture
 
 ### 3.1 Overview
 
-KARL implements a closed-loop pipeline:
+KARL implements the Trajectory Memory Ledger as a closed-loop pipeline:
 
 ```
 Recording -> Scoring -> Analysis -> Training -> Improved Routing
@@ -56,15 +56,16 @@ Recording -> Scoring -> Analysis -> Training -> Improved Routing
     +------------- Better trajectories <-------------+
 ```
 
-The system consists of seven components, each independently deployable:
+The system consists of eight components, each independently deployable:
 
 1. **Trajectory Tap** (recording)
-2. **Reward Engine** (scoring)
-3. **Embedding Cache** (routing infrastructure)
-4. **Weight Updater** (routing optimization)
-5. **SFT Exporter** (training data generation)
-6. **Entity Bridge** (skill entity intelligence)
-7. **Trainer** (remote LoRA fine-tuning)
+2. **Rust Ledger Daemon** (durable ingestion, schema normalization, cursor state, locked append, metrics)
+3. **Reward Engine** (scoring)
+4. **Embedding Cache** (routing infrastructure)
+5. **Weight Updater** (routing optimization)
+6. **SFT Exporter** (training data generation)
+7. **Entity Bridge** (skill entity intelligence)
+8. **Trainer** (remote LoRA fine-tuning)
 
 ### 3.2 Trajectory Recording
 
@@ -80,15 +81,20 @@ KARL instruments the agent's hook system at four points:
 
 The entire tap pipeline operates within a 500ms hook budget enforced by SIGALRM. No tap blocks the agent's response.
 
+Live mesh-orchestration flow events are handled by `trajectory-ledgerd`, a Rust daemon that tails dated gateway event files, tracks cursor state by `(date, seq)`, reduces completed flows into schema-v2 trajectory cards, scores them at emit time, appends them to the ledger with file locking, and writes Prometheus-format metrics. This moves the failure-prone live collection path into a typed single binary while preserving Python for research, export, and training workflows.
+
 ### 3.3 Trajectory Record Format
 
-Each trajectory record contains:
+Each schema-v2 trajectory record contains:
 
 ```json
 {
+  "schema_version": 2,
   "id": "traj_{session_prefix}_{unix_timestamp}",
   "session_id": "uuid",
+  "source": "verbose-all",
   "channel": "live",
+  "domain": "ops",
   "recorded_at": "ISO-8601",
   "skill": {"name": "ops:deploy", "domain": "ops"},
   "context": {
@@ -103,6 +109,8 @@ Each trajectory record contains:
     "successes": 5,
     "failures": 0,
     "bash_errors": 0,
+    "observed_event_count": 5,
+    "placeholder_event_count": 0,
     "events": [...]
   },
   "outcome": {
@@ -121,7 +129,7 @@ Each trajectory record contains:
 }
 ```
 
-The store is append-only JSONL with fcntl file locking for concurrent safety. Annotation (Tap D) is the only operation that reads and rewrites the store.
+The store is append-only JSONL with fcntl file locking for concurrent safety. Historical rows from earlier writers are normalized into the same schema. When an old log was capped, KARL records explicit placeholder events so `total_tools`, `tool_sequence`, and `events` remain length-consistent while preserving the distinction between observed events and recovered tool-step slots.
 
 ## 4. Reward Engine
 
@@ -133,13 +141,13 @@ The reward function must satisfy three constraints:
 2. **Multi-dimensional.** A trajectory can succeed at the task but be inefficient, or fail at the task but demonstrate good process. The reward must capture both dimensions.
 3. **Bounded and interpretable.** Scores in [0, 1] with clear component decomposition for debugging.
 
-### 4.2 Three-Signal Composite
+### 4.2 Six-Signal Composite
 
-The reward is a weighted combination of three signals:
+The deployed reward engine is a weighted combination of six signals:
 
-$$R = 0.40 \cdot R_{outcome} + 0.35 \cdot R_{process} + 0.25 \cdot R_{efficiency}$$
+$$R = 0.25 R_{outcome} + 0.22 R_{process} + 0.13 R_{efficiency} + 0.13 R_{verification} + 0.13 R_{consistency} + 0.14 R_{motion}$$
 
-Weights are configurable via environment variables and must sum to 1.0.
+The original outcome/process/efficiency formulation is retained as the conceptual base. Deployment added verification, consistency, and wasted-motion penalties after early ablations showed that process shape carried most of the ranking signal.
 
 #### 4.2.1 Outcome Score (R_outcome)
 
@@ -184,6 +192,18 @@ $$H = -\sum_{t \in tools} p(t) \log_2 p(t)$$
 
 - **File touch rate** (30% weight): Proportion of Write and Edit operations in the trajectory. A session that only reads files without modifying anything is typically less productive.
 
+#### 4.2.4 Verification Score (R_verification)
+
+Verification rewards trajectories that check their own work. It looks for tests, build commands, and read-after-write behavior. This signal separates sessions that merely edit files from sessions that close the loop with evidence.
+
+#### 4.2.5 Consistency Score (R_consistency)
+
+Consistency rewards coherent tool ordering and penalizes contradictory or thrashing patterns. Examples include repeated failed Bash calls without adaptation, write/write loops on the same target, and mutation before enough context has been gathered.
+
+#### 4.2.6 Wasted Motion Score (R_motion)
+
+Wasted motion penalizes tool retries, error loops, excessive reads after the answer is already known, and other low-linearity behavior. The goal is not to make trajectories shorter at all costs, but to prefer direct, adaptive progress over circular motion.
+
 ### 4.3 Advantage Computation
 
 The advantage is computed relative to a domain-specific baseline:
@@ -226,6 +246,8 @@ The training format teaches the model to generate effective tool-use plans given
   ]
 }
 ```
+
+On the normalized schema-v2 corpus, the exporter produced 3,678 ChatML examples: 3,310 training rows and 368 validation rows. The exported plans average 9.26 tool steps, with a range of 2 to 20 steps after placeholder events are excluded from plan text.
 
 ### 5.2 Synthetic QA Augmentation
 
@@ -357,16 +379,20 @@ KARL is deployed across a five-machine mesh:
 | Mac4 | Compute | exo cluster worker |
 | Mac5 | Compute | LoRA training, MLX server |
 
-Trajectory data from all machines consolidates to a central store via Syncthing. Training runs weekly on Mac5 (M4, 16GB).
+Trajectory data from all machines consolidates to a central store via Syncthing. Live gateway flow data is ingested by `trajectory-ledgerd`, which preserves date-scoped cursor semantics so daily event files can restart at `seq=1` without dropping data. Training runs weekly on Mac5 (M4, 16GB).
 
 ### 8.2 Scale Characteristics
 
-After two weeks of production deployment:
+The current normalized deployment store contains:
 
-- **Trajectory volume**: ~50-100 records per day across active machines
-- **Store size**: ~2MB per 1000 records
-- **Hook latency**: <5ms for cache hits, <500ms for cache misses (async)
-- **Training cycle**: ~3 minutes for 500 iterations on 1000 examples
+- **Trajectory volume**: 7,468 scored records
+- **Observed tool events**: 67,409 directly observed events
+- **Recovered tool steps**: 73,470 total steps, including 6,061 explicit placeholders from capped historical logs
+- **Source mix**: 7,300 `verbose-all` records, 43 live aura-gateway flow records, and 125 archive records
+- **Training export**: 3,678 ChatML examples, split into 3,310 train and 368 validation rows
+- **Reward distribution**: mean 0.6632, median 0.6675, standard deviation 0.0498, range [0.4666, 0.8165]
+- **Hook latency target**: <5ms for cache hits, <500ms for cache misses (async)
+- **Rust ledger daemon**: date-scoped cursor, locked JSONL append, score-at-emit, Prometheus text metrics
 - **Entity updates**: <1ms per flush (JSON read/write)
 
 ### 8.3 Configuration
@@ -378,10 +404,13 @@ All 40+ parameters are configurable via environment variables with sensible defa
 export KARL_DATA_DIR=~/.karl/data
 export KARL_SKILLS_DIR=~/.claude/skills
 
-# Reward weights (must sum to 1.0)
-export KARL_REWARD_W_OUTCOME=0.40
-export KARL_REWARD_W_PROCESS=0.35
-export KARL_REWARD_W_EFFICIENCY=0.25
+# Reward weights in the deployed six-signal engine
+export KARL_REWARD_W_OUTCOME=0.25
+export KARL_REWARD_W_PROCESS=0.22
+export KARL_REWARD_W_EFFICIENCY=0.13
+export KARL_REWARD_W_VERIFICATION=0.13
+export KARL_REWARD_W_CONSISTENCY=0.13
+export KARL_REWARD_W_MOTION=0.14
 
 # Training
 export KARL_TRAIN_SSH_ALIAS=mac5
@@ -393,11 +422,13 @@ export KARL_MLX_ITERS=500
 
 ### 9.1 Reward Signal Quality
 
-The three-signal reward captures different failure modes:
+The six-signal reward captures different failure modes:
 
 - **High outcome, low process**: The agent got lucky despite tool failures. The process score prevents this from being oversampled in training.
 - **High process, low outcome**: The agent worked correctly but on the wrong task. The outcome score (via corrections) catches this.
 - **High outcome, low efficiency**: The agent succeeded but used too many tools or lacked diversity. The efficiency score provides a parsimony incentive.
+- **High mutation, low verification**: The agent changed files but did not test or inspect the result. The verification score catches this.
+- **High process, high wasted motion**: The tools succeeded, but the path looped through avoidable retries. The motion score catches this.
 
 The composite nature means no single axis can dominate, reducing reward hacking risk.
 
@@ -405,43 +436,48 @@ The composite nature means no single axis can dominate, reducing reward hacking 
 
 KARL requires ~100 trajectories before the shadow router has enough data for promotion analysis. During cold start, regex routing remains authoritative and trajectories accumulate passively. The backfill command can bootstrap from existing verbose logs if available.
 
-### 9.3 Signal Ablation Results
+### 9.3 Normalized Signal Ablation
 
-An expanded deployment of KARL with a 5-signal reward function (splitting the original 3-signal design into outcome, process, efficiency, verification, and consistency) was evaluated via leave-one-out ablation on 290 trajectories (21,380 tool calls). The results reveal which reward signals actually drive trajectory ranking.
+After schema normalization, we reran a leave-one-out ranking ablation on all 7,468 scored trajectories. The corpus contains 67,409 observed tool events and 73,470 recovered tool steps. For each signal, we removed that signal, renormalized the remaining weights, and measured Spearman rank correlation against the full six-signal reward ranking.
 
-**Signal importance ranking (by measured impact):**
+| Rank | Removed Signal | Rank Correlation | Top-20 Overlap | Rank Impact |
+|------|----------------|------------------|----------------|-------------|
+| 1 | Verification | 0.5666 | 2/20 | 0.4334 |
+| 2 | Process | 0.8909 | 19/20 | 0.1091 |
+| 3 | Efficiency | 0.8938 | 15/20 | 0.1062 |
+| 4 | Wasted motion | 0.8949 | 15/20 | 0.1051 |
+| 5 | Consistency | 0.9346 | 12/20 | 0.0654 |
+| 6 | Outcome | 1.0000 | 20/20 | 0.0000 |
 
-| Rank | Signal | Impact | Effect of Removal |
-|------|--------|--------|-------------------|
-| 1 | Efficiency | 0.568 | Destroys ranking (rank correlation drops to 0.582) |
-| 2 | Verification | 0.256 | 5/20 top trajectories displaced |
-| 3 | Consistency | 0.168 | 3/20 top trajectories displaced |
-| 4 | Process | 0.097 | Rankings mostly stable |
-| 5 | Outcome | 0.005 | Rankings barely change |
+**Signal means:** outcome = 0.5000, process = 0.9502, efficiency = 0.5571, verification = 0.3799, consistency = 0.6430, motion = 0.8836.
 
-**Corpus statistics:** mean reward = 0.635 ($\sigma$ = 0.095, min = 0.225, max = 0.815). Signal means: outcome = 0.671, process = 0.898, efficiency = 0.619, verification = 0.332, consistency = 0.444.
+The strongest current differentiator is verification. Removing it drops rank correlation to 0.5666 and leaves only 2 of the top 20 trajectories in place. Process, efficiency, and motion each affect ranking at roughly the same order of magnitude. Outcome has zero rank impact in this normalized backfill because most historical batch records do not contain cross-turn correction or redo annotations, so the outcome channel defaults to 0.5. This should be read as a data-availability limitation, not as evidence that outcome feedback is intrinsically useless.
 
-The most significant finding is that **outcome is the least important signal** (impact = 0.005). Task completion, corrections, and user satisfaction, the signals that standard RLHF treats as primary, contribute almost nothing to trajectory differentiation when behavioral signals are present. How an agent works matters more than whether it succeeds.
+### 9.4 Advantage Selection Check
 
-This has direct implications for the 3-signal design in this paper. The efficiency signal (tool diversity via Shannon entropy) is the most discriminative component. In the original 3-signal formulation, efficiency carries 25% weight. The ablation suggests this weight should be higher, and the outcome weight (currently 40%) could be reduced without meaningful loss of ranking quality. The behavioral signals (efficiency, verification, consistency) subsume the information that outcome attempts to capture: an agent using diverse tools, verifying its work, and reading before writing almost always produces a correct result.
+On the normalized exportable subset (5,805 records with at least two observed events), the top 35 domain-advantage trajectories have mean reward 0.7734. A deterministic random-35 control with seed 42 has mean reward 0.6771. The reward effect size is Cohen's d = 2.7159; the domain-advantage effect size is Cohen's d = 2.7917. This reproduces the earlier qualitative conclusion that high-advantage curation selects substantially stronger training examples than random selection. It is a selection-quality check, not a fresh LoRA training run.
 
-### 9.4 Limitations
+### 9.5 Limitations
 
 **Outcome attribution**: The correction detector uses regex patterns and heuristics. Subtle dissatisfaction (user switches tasks without correcting) is not captured. Future work could incorporate session-level engagement metrics.
 
-**Single-turn trajectories**: KARL records within a single agent response. Multi-turn collaborative sessions where the user and agent iterate together are recorded as separate trajectories, losing the conversation-level signal.
+**Single-turn trajectories**: KARL records within a single agent response. Multi-turn collaborative sessions where the user and agent iterate together are recorded as separate trajectories, losing some conversation-level signal.
+
+**Historical placeholder events**: Earlier logs capped detailed event payloads. Schema v2 preserves recovered `total_tools` by inserting explicit placeholders, but SFT export excludes those placeholders from plan text. Paper metrics therefore distinguish 67,409 observed events from 73,470 recovered tool steps.
+
+**Outcome sparsity in backfilled data**: Most historical records lack cross-turn correction/redo annotations, so outcome scores are often neutral. Live taps and future data should make this channel more informative.
 
 **Model capacity**: The current LoRA training uses a 1B parameter base model (gemma-3-1b-it-4bit). The fine-tuned model learns tool-use planning patterns but cannot replace the frontier model for actual code generation. It serves as a routing and planning advisor, not a replacement.
 
 ## 10. Conclusion
 
-KARL demonstrates that trajectory-based reinforcement learning can close the feedback loop for AI coding agents without human annotation. By recording what agents do, scoring how well they do it, and training on the best trajectories, the system continuously improves skill routing and tool-use planning.
+The Trajectory Memory Ledger demonstrates that trajectory-based learning can turn ordinary coding-agent work into a reusable improvement signal. By recording what agents do, normalizing heterogeneous logs into one schema, scoring process quality, and exporting the best trajectories, the system creates a practical feedback loop for skill routing and tool-use planning.
 
-The ablation study on 290 trajectories sharpens this insight: the efficiency signal (tool diversity via Shannon entropy) is the single most important component of the reward function, while the outcome signal (task completion, corrections) is the least important. How an agent works, measured through tool diversity, verification discipline, and read-before-write consistency, matters more than whether it succeeds. Behavioral process signals subsume the information in outcome signals, making explicit outcome measurement nearly redundant for trajectory ranking.
+The normalized corpus now contains 7,468 scored trajectories and 67,409 observed tool events. The schema-v2 ablation sharpens the deployed reward design: verification is the most load-bearing ranking signal in the current corpus, while process, efficiency, and wasted motion provide secondary but meaningful ranking structure. Outcome remains under-instrumented in historical backfill data and should be interpreted cautiously until more live cross-turn annotations accumulate.
 
 The entity bridge extends this from session-level learning to skill-level intelligence, replacing time-based decay with performance-based adaptation. Skills that consistently produce poor trajectories lose confidence and routing weight, while skills that consistently succeed gain both.
 
-KARL is open-source at [github.com/Diomandeee/karl](https://github.com/Diomandeee/karl) and designed for easy integration with any agent framework that supports hook events.
+KARL, the reference implementation of the Trajectory Memory Ledger, is open-source at [github.com/Diomandeee/karl](https://github.com/Diomandeee/karl) and designed for easy integration with any agent framework that supports hook events.
 
 ## References
 
@@ -495,7 +531,7 @@ Full Online Advantage-weighted Policy Learning uses on-policy rollouts with a va
 - **Discrete** oversampling tiers (instead of continuous importance weights)
 - **Periodic** batch training (weekly, instead of continuous updates)
 
-This trades sample efficiency for implementation simplicity. With ~500-700 trajectories per week in production, the offline approach provides sufficient signal for the 1B-parameter LoRA training.
+This trades sample efficiency for implementation simplicity. With thousands of normalized trajectories available, the offline approach provides enough signal to generate curated SFT splits while keeping training runs reproducible.
 
 ## Appendix C: Entity Bridge Integration
 

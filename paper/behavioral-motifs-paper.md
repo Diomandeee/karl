@@ -2,7 +2,7 @@
 
 **Mohamed Diomande**
 
-March 2026
+June 2026
 
 ---
 
@@ -35,11 +35,11 @@ The conditional memory literature motivates this design. DeepSeek's Engram archi
 
 ### 2.1 Agent Trajectory Learning
 
-SWE-Bench [2] and similar benchmarks evaluate agent coding ability on curated tasks with known solutions but provide point-in-time measurements, not continuous improvement signals. Databricks' Agent Training work introduced trajectory-based learning for coding agents, capturing tool-use sequences for fine-tuning. KARL (our prior work) extends this with advantage-weighted selection and entity-level performance tracking from 121+ real trajectories across 11 domains.
+SWE-Bench [2] and similar benchmarks evaluate agent coding ability on curated tasks with known solutions but provide point-in-time measurements, not continuous improvement signals. Databricks' Agent Training work introduced trajectory-based learning for coding agents, capturing tool-use sequences for fine-tuning. The Trajectory Memory Ledger, implemented in KARL, extends this with advantage-weighted selection, schema-normalized trajectory storage, and entity-level performance tracking. The current KARL deployment contains 7,468 scored trajectories, 67,409 observed tool events, and 73,470 recovered tool steps across 50+ active projects.
 
 ### 2.2 Reward Design
 
-RLHF [3] requires human preference labels. Process reward models [4] reward correct reasoning steps rather than just final answers. Our approach derives reward from observable behavior (tool success rates, user corrections, session outcomes) with zero human annotation. The 5-signal composite reward we use (outcome quality, process efficiency, tool-use patterns, trajectory dynamics, correction rate) was validated in an ablation showing Cohen's d = 3.065 between high-advantage and random trajectory selection (Section 4.2).
+RLHF [3] requires human preference labels. Process reward models [4] reward correct reasoning steps rather than just final answers. Our approach derives reward from observable behavior (tool success rates, user corrections, session outcomes) with zero human annotation. The controlled motif experiments below use the then-current reward snapshot, which was validated in an ablation showing Cohen's d = 3.065 between high-advantage and random trajectory selection (Section 4.2). The broader KARL deployment has since been normalized to schema v2 and rescored with a six-signal reward engine that separates verification, consistency, and wasted motion.
 
 ### 2.3 Conditional Memory
 
@@ -187,7 +187,7 @@ Each experiment isolates one variable. No confounded comparisons.
 
 **Setup.** Two training runs with identical configuration:
 - **Control**: 35 trajectories selected uniformly at random
-- **Treatment**: 35 trajectories with the highest advantage scores (computed by KARL's 5-signal reward function)
+- **Treatment**: 35 trajectories with the highest advantage scores (computed by KARL's experiment-time reward snapshot)
 - **Config**: Qwen2.5-7B base, LoRA rank 8, 500 iterations, learning rate 1e-4, batch size 1
 
 **Metric.** Training loss at iteration 500; generation quality on 10 held-out prompts rated by specificity scorer.
@@ -281,7 +281,7 @@ The annotation is significantly better than random at predicting session outcome
 | Mean specificity | Lower | Higher |
 | Cohen's d | — | 3.065 |
 
-The very large effect size (d > 3.0) indicates that trajectory quality, as measured by the 5-signal reward function, is a strong predictor of training data value.
+The very large effect size (d > 3.0) indicates that trajectory quality, as measured by the experiment-time reward snapshot, is a strong predictor of training data value.
 
 ### 5.3 Routing Comparison (Experiment 4.3)
 

@@ -32,19 +32,13 @@ Usage:
 
 import json
 import hashlib
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# Paths come from config.py — the single source of truth. Redefining them
-# here previously shadowed config and caused export to write to one place
-# while the trainer's upload step read from another.
-from karl.config import (  # noqa: E402
-    STORE_PATH,
-    SFT_OUTPUT_PATH as OUTPUT_PATH,
-    TRAIN_PATH,
-    VALID_PATH,
-)
+from karl import config  # noqa: E402
+from karl.schema import normalize_record  # noqa: E402
 
 KARL_DIR = Path(__file__).parent
 
@@ -62,13 +56,33 @@ ADVANTAGE_THRESHOLD = 0.0  # Include if advantage >= this
 MIN_TOOL_EVENTS = 2      # Skip trivial trajectories
 
 
+SECRET_PATTERNS = (
+    re.compile(r"(?i)\b(api[_-]?key|secret|token|password)\s*=\s*['\"]?[^'\"\s]+"),
+    re.compile(r"\bghp_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]+(?:_[A-Za-z0-9_]+)+\b"),
+    re.compile(r"\bBearer\s+[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?\b"),
+    re.compile(r"\bsk-[A-Za-z0-9]{10,}\b"),
+)
+
+
+def _strip_credentials(text: str) -> str:
+    """Redact obvious credentials before writing SFT examples."""
+    cleaned = text
+    for pattern in SECRET_PATTERNS:
+        cleaned = pattern.sub("[REDACTED]", cleaned)
+    return cleaned
+
+
 def _trajectory_to_plan(record: Dict) -> str:
     """Convert a trajectory record into a tool plan summary.
 
     This is what the model learns to generate: given a prompt,
     predict an effective tool-use sequence.
     """
-    events = record.get("trajectory", {}).get("events", [])
+    events = [
+        event for event in record.get("trajectory", {}).get("events", [])
+        if not event.get("placeholder")
+    ]
     if not events:
         return ""
 
@@ -172,32 +186,21 @@ def export_sft(
 
     Returns stats dict.
     """
-    if not STORE_PATH.exists():
+    if not config.STORE_PATH.exists():
         return {"error": "No trajectory store found"}
 
-    # Load all scored trajectories
-    # _derive_scoring_fields materializes events/total_tools/etc. from the
-    # on-disk tool_calls schema so the exporter's `events` lookups resolve.
-    try:
-        from karl.reward_engine import _derive_scoring_fields
-    except ImportError:
-        _derive_scoring_fields = None  # type: ignore
-
+    # Load all scored trajectories in canonical schema form.
     records = []
     filtered_quality = 0
-    with open(STORE_PATH) as f:
+    with open(config.STORE_PATH) as f:
         for line in f:
             try:
-                record = json.loads(line)
+                record = normalize_record(json.loads(line))
                 reward = record.get("outcome", {}).get("reward_score")
                 if reward is not None and reward >= min_reward:
                     if not _passes_quality_filter(record, quality_filter):
                         filtered_quality += 1
                         continue
-                    if _derive_scoring_fields is not None:
-                        record["trajectory"] = _derive_scoring_fields(
-                            record.get("trajectory", {})
-                        )
                     records.append(record)
             except json.JSONDecodeError:
                 continue
@@ -233,8 +236,10 @@ def export_sft(
     oversampled = 0
 
     for record in records:
-        events = record.get("trajectory", {}).get("events", [])
-        if len(events) < MIN_TOOL_EVENTS:
+        trajectory = record.get("trajectory", {})
+        observed_events = int(trajectory.get("observed_event_count") or 0)
+        events = [event for event in trajectory.get("events", []) if not event.get("placeholder")]
+        if max(observed_events, len(events)) < MIN_TOOL_EVENTS:
             filtered_too_short += 1
             continue
 
@@ -249,11 +254,11 @@ def export_sft(
             continue
 
         # Build the training example
-        prompt = record.get("context", {}).get("prompt_text", "")
+        prompt = _strip_credentials(record.get("context", {}).get("prompt_text", ""))
         if not prompt or len(prompt) < 10:
             prompt = f"[Task in {record.get('context', {}).get('cwd', 'unknown project')}]"
 
-        plan = _trajectory_to_plan(record)
+        plan = _strip_credentials(_trajectory_to_plan(record))
         if not plan or len(plan) < 20:
             continue
 
@@ -281,7 +286,7 @@ def export_sft(
 
     # Include synthetic QA data (Phase 6)
     synthetic_count = 0
-    synthetic_path = KARL_DIR / "synthetic_qa.jsonl"
+    synthetic_path = config.SYNTHETIC_PATH
     if synthetic_path.exists():
         with open(synthetic_path) as f:
             for line in f:
@@ -326,8 +331,8 @@ def export_sft(
         }
 
     # Write combined output
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(OUTPUT_PATH, "w") as f:
+    config.SFT_OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(config.SFT_OUTPUT_PATH, "w") as f:
         for ex in examples:
             f.write(json.dumps(ex) + "\n")
 
@@ -339,11 +344,11 @@ def export_sft(
     train_examples = examples[:split_idx]
     valid_examples = examples[split_idx:]
 
-    with open(TRAIN_PATH, "w") as f:
+    with open(config.TRAIN_PATH, "w") as f:
         for ex in train_examples:
             f.write(json.dumps(ex) + "\n")
 
-    with open(VALID_PATH, "w") as f:
+    with open(config.VALID_PATH, "w") as f:
         for ex in valid_examples:
             f.write(json.dumps(ex) + "\n")
 
@@ -360,9 +365,9 @@ def export_sft(
         "filtered_quality": filtered_quality,
         "quality_filter": quality_filter,
         "baselines": {k: round(v, 4) for k, v in baselines.items()},
-        "output": str(OUTPUT_PATH),
-        "train_file": str(TRAIN_PATH),
-        "valid_file": str(VALID_PATH),
+        "output": str(config.SFT_OUTPUT_PATH),
+        "train_file": str(config.TRAIN_PATH),
+        "valid_file": str(config.VALID_PATH),
     }
 
 
@@ -376,11 +381,11 @@ def check_sft_readiness(min_high_quality: int = 30, min_skills: int = 5) -> Dict
     """
     from collections import Counter
 
-    if not STORE_PATH.exists():
+    if not config.STORE_PATH.exists():
         return {"status": "no_data", "ready": False}
 
     records = []
-    with open(STORE_PATH) as f:
+    with open(config.STORE_PATH) as f:
         for line in f:
             try:
                 r = json.loads(line)
@@ -399,19 +404,15 @@ def check_sft_readiness(min_high_quality: int = 30, min_skills: int = 5) -> Dict
     for r in records:
         grade = r.get("quality", {}).get("grade", "unknown")
         quality_counts[grade] += 1
-        # `skill` is a routing-label string on disk, not a nested dict.
-        skill = r.get("skill") or "unknown"
+        r = normalize_record(r)
+        skill_value = r.get("skill") or {}
+        skill = skill_value.get("name") if isinstance(skill_value, dict) else str(skill_value)
+        skill = skill or r.get("source") or "unknown"
         skill_counts[skill] += 1
-        # Check if exportable (has tool events in trajectory or context).
-        # On-disk schema is `tool_calls`; older/synthetic records may use
-        # `events` or context.tool_events — accept any.
         traj = r.get("trajectory", {})
-        tools = (
-            traj.get("tool_calls")
-            or traj.get("events")
-            or r.get("context", {}).get("tool_events", [])
-        )
-        if len(tools) >= MIN_TOOL_EVENTS:
+        observed = int(traj.get("observed_event_count") or 0)
+        tools = [event for event in (traj.get("events") or []) if not event.get("placeholder")]
+        if max(observed, len(tools)) >= MIN_TOOL_EVENTS:
             exportable += 1
 
     high_quality = quality_counts.get("high", 0) + quality_counts.get("medium", 0)

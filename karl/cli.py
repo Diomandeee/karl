@@ -11,6 +11,7 @@ Provides subcommands for all KARL operations:
   karl bootstrap    - Generate skill embeddings
   karl synthetic    - Generate synthetic QA from git diffs
   karl weights      - Show/update skill weights
+  karl normalize    - Normalize trajectory store schema
 """
 
 import argparse
@@ -33,7 +34,11 @@ def cmd_status(args):
     print(f"  Total records: {store_stats['total']}")
     print(f"  Size: {store_stats['size_bytes'] / 1024:.1f} KB")
     print(f"  Channels: {store_stats.get('channels', {})}")
+    print(f"  Sources: {store_stats.get('sources', {})}")
     print(f"  Skills: {store_stats.get('skills', {})}")
+    print(f"  Total tools: {store_stats.get('total_tools', 0)}")
+    print(f"  Observed events: {store_stats.get('observed_events', 0)}")
+    print(f"  Placeholder events: {store_stats.get('placeholder_events', 0)}")
     print(f"  With reward: {store_stats.get('with_reward', 0)}")
 
     if reward_stats.get("scored"):
@@ -125,10 +130,17 @@ def cmd_extract(args):
     print(f"Extracted {len(trajectories)} trajectories")
 
 
+def cmd_normalize(args):
+    """Normalize trajectory store schema."""
+    from karl.schema_migration import normalize_store
+    stats = normalize_store(dry_run=args.dry_run, backup=not args.no_backup)
+    print(json.dumps(stats, indent=2, default=str))
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="karl",
-        description="KARL - Knowledge Agents via Reinforcement Learning",
+        description="KARL - Trajectory Memory Ledger",
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -173,6 +185,11 @@ def main():
     p = subparsers.add_parser("extract", help="Extract from verbose logs")
     p.add_argument("--dry-run", action="store_true")
 
+    # normalize
+    p = subparsers.add_parser("normalize", help="Normalize trajectory store schema")
+    p.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    p.add_argument("--no-backup", action="store_true", help="Do not create a backup before writing")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -192,6 +209,7 @@ def main():
         "synthetic": cmd_synthetic,
         "weights": cmd_weights,
         "extract": cmd_extract,
+        "normalize": cmd_normalize,
     }
 
     try:

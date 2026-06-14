@@ -19,9 +19,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from karl.schema import normalize_record
+
 KARL_DIR = Path(__file__).parent
 BUFFER_DIR = KARL_DIR / "buffers"
 STORE_PATH = KARL_DIR / "trajectories.jsonl"
+DEFAULT_STORE_PATH = STORE_PATH
 
 # Canonical writer: only this hostname writes to shared JSONL files.
 # Other nodes write to per-session buffers only (synced via Syncthing).
@@ -373,6 +376,8 @@ def flush_session(
     except Exception:
         pass  # Bridge enrichment is optional
 
+    record = normalize_record(record)
+
     # Compute reward score before storing
     try:
         from reward_engine import compute_reward, compute_advantage
@@ -455,7 +460,8 @@ def append_to_store(record: Dict) -> bool:
     Syncthing conflicts. Non-canonical nodes keep data in session buffers
     which sync to the canonical node for eventual flush.
     """
-    if not IS_CANONICAL_WRITER:
+    record = normalize_record(record)
+    if not IS_CANONICAL_WRITER and STORE_PATH == DEFAULT_STORE_PATH:
         return True  # Silently skip — buffer will sync and flush on canonical node
     try:
         with open(STORE_PATH, "a") as f:
@@ -556,19 +562,38 @@ def get_store_stats() -> Dict[str, Any]:
     total = 0
     channels = {}
     skills = {}
+    sources = {}
+    domains = {}
     with_reward = 0
+    total_tools = 0
+    observed_events = 0
+    placeholder_events = 0
 
     try:
         with open(STORE_PATH, "r") as f:
             for line in f:
                 try:
-                    record = json.loads(line)
+                    record = normalize_record(json.loads(line))
                     total += 1
                     ch = record.get("channel", "unknown")
                     channels[ch] = channels.get(ch, 0) + 1
-                    skill = record.get("skill", {}).get("name")
+                    source = record.get("source", "unknown")
+                    sources[source] = sources.get(source, 0) + 1
+                    domain = record.get("domain", "unknown")
+                    domains[domain] = domains.get(domain, 0) + 1
+                    skill_value = record.get("skill", {})
+                    if isinstance(skill_value, dict):
+                        skill = skill_value.get("name")
+                    elif isinstance(skill_value, str):
+                        skill = skill_value
+                    else:
+                        skill = None
                     if skill:
                         skills[skill] = skills.get(skill, 0) + 1
+                    trajectory = record.get("trajectory", {})
+                    total_tools += int(trajectory.get("total_tools") or 0)
+                    observed_events += int(trajectory.get("observed_event_count") or 0)
+                    placeholder_events += int(trajectory.get("placeholder_event_count") or 0)
                     if record.get("outcome", {}).get("reward_score") is not None:
                         with_reward += 1
                 except json.JSONDecodeError:
@@ -581,5 +606,10 @@ def get_store_stats() -> Dict[str, Any]:
         "size_bytes": STORE_PATH.stat().st_size if STORE_PATH.exists() else 0,
         "channels": channels,
         "skills": skills,
+        "sources": sources,
+        "domains": domains,
+        "total_tools": total_tools,
+        "observed_events": observed_events,
+        "placeholder_events": placeholder_events,
         "with_reward": with_reward,
     }

@@ -1,8 +1,8 @@
-# KARL - Knowledge Agents via Reinforcement Learning
+# KARL - Trajectory Memory Ledger
 
-Trajectory-based intelligence for AI coding agents. KARL records what an agent does during real work sessions, scores those recordings based on outcome quality, and uses the highest-scoring trajectories to improve future performance through LoRA fine-tuning and learned skill routing.
+KARL is the reference implementation of the Trajectory Memory Ledger: a schema-normalized experience replay layer for AI coding agents. It records what an agent does during real work sessions, normalizes those recordings into a schema-v2 trajectory store, scores them with a six-signal reward engine, and uses the highest-scoring trajectories to improve future performance through LoRA fine-tuning and learned skill routing.
 
-Based on the KARL paper ([arXiv 2603.05218](https://arxiv.org/abs/2603.05218)).
+Based on the Trajectory Memory Ledger paper ([arXiv 2603.05218](https://arxiv.org/abs/2603.05218)).
 
 ## How It Works
 
@@ -22,7 +22,7 @@ Agent works: Read, Edit, Bash, Grep, ...
 Agent finishes
     |
     v
-[Tap C] Flush buffer -> compute 3-signal reward -> trajectories.jsonl
+[Tap C] Flush buffer -> compute six-signal reward -> trajectories.jsonl
     |
     v
 Next prompt arrives
@@ -31,19 +31,22 @@ Next prompt arrives
 [Tap D] Detect corrections ("no, I meant...", "try again") -> annotate previous
 ```
 
-The trajectory store grows over time. The best trajectories are exported as advantage-weighted SFT data and used to train a LoRA adapter via MLX.
+The trajectory store grows over time. The current normalized store contains 7,468 scored trajectories, 67,409 observed tool events, and 73,470 recovered tool steps. The best trajectories are exported as advantage-weighted SFT data and used to train a LoRA adapter via MLX; the current export contains 3,678 ChatML examples split into 3,310 train and 368 validation rows.
 
 ## Reward Engine
 
-Three signals, composite weighted:
+Six signals, composite weighted:
 
 | Signal | Weight | Measures |
 |--------|--------|----------|
-| **Outcome** | 40% | Was the user satisfied? No correction, no redo, build passed, session continued |
-| **Process** | 35% | Did tools work? Success rate, bash exit codes, error density |
-| **Efficiency** | 25% | Was it efficient? Tool diversity (Shannon entropy), tools/minute, file touch rate |
+| **Outcome** | 25% | Was the user satisfied? No correction, no redo, build passed, session continued |
+| **Process** | 22% | Did tools work? Success rate, bash exit codes, error density |
+| **Efficiency** | 13% | Was it efficient? Tool diversity, duration efficiency, file touch rate |
+| **Verification** | 13% | Did the agent check its own work? Tests, builds, read-after-write |
+| **Consistency** | 13% | Was the tool order coherent? Low thrash, enough context before mutation |
+| **Wasted motion** | 14% | Did the trajectory avoid repeated loops and unnecessary retries? |
 
-Composite reward is `[0, 1]`. Advantage = reward - domain baseline, used for OAPL-Lite oversampling.
+Composite reward is `[0, 1]`. Advantage = reward - domain baseline, used for OAPL-Lite oversampling. On the normalized corpus, mean reward is 0.6632 and the reward range is 0.4666-0.8165.
 
 ## Skill Routing
 
@@ -73,6 +76,31 @@ pip install -e ".[prefect]"
 pip install -e ".[dev]"
 ```
 
+## Rust Ledger Daemon
+
+`crates/trajectory-ledgerd` is the durable Rust runtime for the live ledger path. It owns the infrastructure-sensitive pieces of the Trajectory Memory Ledger:
+
+- ingestion from `~/.aura-gateway-events/events-YYYY-MM-DD.jsonl`
+- schema-v2 normalization
+- six-signal reward scoring
+- date-scoped cursor handling
+- locked append to `trajectories.jsonl`
+- Prometheus text metrics export
+
+Run one ingestion pass:
+
+```bash
+cargo run --manifest-path crates/trajectory-ledgerd/Cargo.toml -- \
+  run \
+  --once \
+  --events-dir ~/.aura-gateway-events \
+  --cursor ~/.aura-gateway-events.cursor \
+  --store ~/Desktop/karl/karl/trajectories.jsonl \
+  --metrics /tmp/trajectory-ledgerd.prom
+```
+
+Run continuously by omitting `--once`. Python remains the research and training layer: batch extraction, SFT export, ablation reports, and MLX/LoRA dispatch.
+
 ## CLI
 
 KARL ships with 67 commands. Core commands:
@@ -87,6 +115,8 @@ karl organic-status          # Organic data accumulation progress
 # Trajectory management
 karl backfill                # Backfill rewards for unscored trajectories
 karl backfill --force        # Recompute all rewards
+karl normalize               # Normalize trajectory store to schema v2
+karl normalize --dry-run     # Validate normalization without writing
 karl replay                  # Replay trajectory sequence
 
 # Skill routing
@@ -140,9 +170,13 @@ Run `karl help` for the complete list.
 
 ```
 karl/
+  crates/trajectory-ledgerd/  # Rust live ledger daemon
+
   # Core pipeline (4 taps)
   trajectory_tap.py          # Session buffer init, tool event append, flush, annotate
-  reward_engine.py           # 3-signal composite reward scorer
+  reward_engine.py           # 6-signal composite reward scorer
+  schema.py                  # Canonical schema-v2 normalizer
+  schema_migration.py        # JSONL store migration + validation
   embedding_cache.py         # Prompt cache + skill embeddings + centroid management
   trajectory_bridge.py       # Shadow analysis, promotion, hybrid routing, analytics
 
@@ -218,9 +252,12 @@ export KARL_EMBEDDING_DIM=3072
 export KARL_CACHE_MAX_ENTRIES=500
 
 # Reward weights
-export KARL_REWARD_W_OUTCOME=0.40
-export KARL_REWARD_W_PROCESS=0.35
-export KARL_REWARD_W_EFFICIENCY=0.25
+export KARL_REWARD_W_OUTCOME=0.25
+export KARL_REWARD_W_PROCESS=0.22
+export KARL_REWARD_W_EFFICIENCY=0.13
+export KARL_REWARD_W_VERIFICATION=0.13
+export KARL_REWARD_W_CONSISTENCY=0.13
+export KARL_REWARD_W_MOTION=0.14
 
 # Training
 export KARL_TRAIN_SSH_ALIAS=mac5

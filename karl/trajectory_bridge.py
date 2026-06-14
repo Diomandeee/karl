@@ -23,6 +23,8 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from karl.schema import normalize_record
+
 KARL_DIR = Path(__file__).parent
 SHADOW_PATH = KARL_DIR / "routing_shadow.jsonl"
 TRAJECTORY_PATH = KARL_DIR / "trajectories.jsonl"
@@ -86,7 +88,7 @@ def load_trajectories() -> List[dict]:
     with open(TRAJECTORY_PATH) as f:
         for line in f:
             try:
-                records.append(json.loads(line))
+                records.append(normalize_record(json.loads(line)))
             except json.JSONDecodeError:
                 continue
     return records

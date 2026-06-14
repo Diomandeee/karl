@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 VERBOSE_PATH = Path.home() / ".claude" / "prompt-logs" / "verbose-all.jsonl"
 KARL_DIR = Path(__file__).parent
 STORE_PATH = KARL_DIR / "trajectories.jsonl"
+sys.path.insert(0, str(KARL_DIR.parent))
 
 # Codex tool name → Claude Code tool name mapping
 TOOL_NAME_MAP = {
@@ -43,6 +44,10 @@ def normalize_tool_name(name: str) -> str:
 
 def extract_trajectories(dry_run: bool = False) -> List[Dict]:
     """Extract trajectories from verbose-all.jsonl."""
+    from karl.extractor import extract_trajectories as canonical_extract
+
+    return canonical_extract(verbose_path=VERBOSE_PATH, dry_run=dry_run)
+
     if not VERBOSE_PATH.exists():
         print(f"[extractor] verbose-all.jsonl not found at {VERBOSE_PATH}")
         return []

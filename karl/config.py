@@ -73,12 +73,22 @@ CACHE_TTL_SECONDS = _env_int("KARL_CACHE_TTL", 86400)  # 24 hours
 # Reward engine
 # ---------------------------------------------------------------------------
 
-REWARD_W_OUTCOME = _env_float("KARL_REWARD_W_OUTCOME", 0.40)
-REWARD_W_PROCESS = _env_float("KARL_REWARD_W_PROCESS", 0.35)
-REWARD_W_EFFICIENCY = _env_float("KARL_REWARD_W_EFFICIENCY", 0.25)
+REWARD_W_OUTCOME = _env_float("KARL_REWARD_W_OUTCOME", 0.25)
+REWARD_W_PROCESS = _env_float("KARL_REWARD_W_PROCESS", 0.22)
+REWARD_W_EFFICIENCY = _env_float("KARL_REWARD_W_EFFICIENCY", 0.13)
+REWARD_W_VERIFICATION = _env_float("KARL_REWARD_W_VERIFICATION", 0.13)
+REWARD_W_CONSISTENCY = _env_float("KARL_REWARD_W_CONSISTENCY", 0.13)
+REWARD_W_MOTION = _env_float("KARL_REWARD_W_MOTION", 0.14)
 
 # Validate reward weights sum to 1.0 (A9/X9)
-_reward_sum = REWARD_W_OUTCOME + REWARD_W_PROCESS + REWARD_W_EFFICIENCY
+_reward_sum = (
+    REWARD_W_OUTCOME
+    + REWARD_W_PROCESS
+    + REWARD_W_EFFICIENCY
+    + REWARD_W_VERIFICATION
+    + REWARD_W_CONSISTENCY
+    + REWARD_W_MOTION
+)
 if abs(_reward_sum - 1.0) > 0.01:
     import warnings
     warnings.warn(

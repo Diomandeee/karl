@@ -1,9 +1,9 @@
 """
-KARL — Knowledge Agents via Reinforcement Learning (Adapted)
+KARL — Trajectory Memory Ledger reference implementation
 
-Trajectory-based intelligence layer for Claude Code.
-Captures tool-use trajectories with outcome signals,
-enabling learned skill routing and LoRA-based policy improvement.
+Schema-normalized experience replay layer for coding agents.
+Captures tool-use trajectories with outcome signals, enabling
+learned skill routing and LoRA-based policy improvement.
 
 Modules:
     trajectory_tap: Live session trajectory recording
